@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <body>
+    <main class="job-detail-box">
+      <h1 class="name">Go 后端开发工程师</h1>
+      <button id="contact">立即沟通</button>
+      <section id="chat" hidden>
+        <label for="message">消息</label>
+        <textarea id="message"></textarea>
+        <button id="send">发送</button>
+        <div class="message-list"></div>
+      </section>
+    </main>
+    <script>
+      const contact = document.querySelector("#contact");
+      const chat = document.querySelector("#chat");
+      const input = document.querySelector("#message");
+      const messages = document.querySelector(".message-list");
+      contact.addEventListener("click", () => {
+        chat.hidden = false;
+      });
+      document.querySelector("#send").addEventListener("click", () => {
+        const message = document.createElement("p");
+        message.textContent = input.value;
+        messages.append(message);
+        contact.textContent = "继续沟通";
+      });
+    </script>
+  </body>
+</html>

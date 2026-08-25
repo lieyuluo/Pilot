@@ -1,0 +1,334 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-24T18:03:30.0194819+08:00",
+  "title": "Design System: JobPilot",
+  "extensions": {
+    "colorMeta": {
+      "dispatch-indigo": {
+        "role": "primary",
+        "displayName": "Dispatch Indigo",
+        "canonical": "oklch(0.46 0.12 294)",
+        "tonalRamp": [
+          "oklch(0.15 0.05 294)",
+          "oklch(0.25 0.08 294)",
+          "oklch(0.35 0.11 294)",
+          "oklch(0.46 0.12 294)",
+          "oklch(0.58 0.10 294)",
+          "oklch(0.70 0.08 294)",
+          "oklch(0.83 0.05 294)",
+          "oklch(0.95 0.02 294)"
+        ]
+      },
+      "dispatch-indigo-hover": {
+        "role": "primary",
+        "displayName": "Dispatch Indigo Hover",
+        "canonical": "oklch(0.40 0.13 294)",
+        "tonalRamp": [
+          "oklch(0.15 0.05 294)",
+          "oklch(0.25 0.09 294)",
+          "oklch(0.32 0.12 294)",
+          "oklch(0.40 0.13 294)",
+          "oklch(0.55 0.11 294)",
+          "oklch(0.68 0.08 294)",
+          "oklch(0.82 0.05 294)",
+          "oklch(0.95 0.02 294)"
+        ]
+      },
+      "dispatch-indigo-soft": {
+        "role": "primary",
+        "displayName": "Quiet Dispatch Wash",
+        "canonical": "oklch(0.94 0.028 294)",
+        "tonalRamp": [
+          "oklch(0.15 0.02 294)",
+          "oklch(0.27 0.025 294)",
+          "oklch(0.40 0.028 294)",
+          "oklch(0.54 0.028 294)",
+          "oklch(0.68 0.028 294)",
+          "oklch(0.80 0.028 294)",
+          "oklch(0.89 0.028 294)",
+          "oklch(0.95 0.025 294)"
+        ]
+      },
+      "paper-white": {
+        "role": "neutral",
+        "displayName": "Paper White",
+        "canonical": "oklch(1 0 0)",
+        "tonalRamp": [
+          "oklch(0.15 0 0)",
+          "oklch(0.27 0 0)",
+          "oklch(0.40 0 0)",
+          "oklch(0.54 0 0)",
+          "oklch(0.68 0 0)",
+          "oklch(0.80 0 0)",
+          "oklch(0.90 0 0)",
+          "oklch(1 0 0)"
+        ]
+      },
+      "quiet-surface": {
+        "role": "neutral",
+        "displayName": "Quiet Surface",
+        "canonical": "oklch(0.975 0.006 294)",
+        "tonalRamp": [
+          "oklch(0.15 0.006 294)",
+          "oklch(0.27 0.006 294)",
+          "oklch(0.40 0.006 294)",
+          "oklch(0.54 0.006 294)",
+          "oklch(0.68 0.006 294)",
+          "oklch(0.80 0.006 294)",
+          "oklch(0.90 0.006 294)",
+          "oklch(0.975 0.006 294)"
+        ]
+      },
+      "strong-surface": {
+        "role": "neutral",
+        "displayName": "Strong Surface",
+        "canonical": "oklch(0.945 0.012 294)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 294)",
+          "oklch(0.27 0.012 294)",
+          "oklch(0.40 0.012 294)",
+          "oklch(0.54 0.012 294)",
+          "oklch(0.68 0.012 294)",
+          "oklch(0.80 0.012 294)",
+          "oklch(0.89 0.012 294)",
+          "oklch(0.945 0.012 294)"
+        ]
+      },
+      "desk-ink": {
+        "role": "neutral",
+        "displayName": "Desk Ink",
+        "canonical": "oklch(0.22 0.02 294)",
+        "tonalRamp": [
+          "oklch(0.15 0.02 294)",
+          "oklch(0.22 0.02 294)",
+          "oklch(0.34 0.02 294)",
+          "oklch(0.47 0.02 294)",
+          "oklch(0.60 0.02 294)",
+          "oklch(0.73 0.02 294)",
+          "oklch(0.85 0.02 294)",
+          "oklch(0.95 0.02 294)"
+        ]
+      },
+      "muted-ink": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "oklch(0.47 0.018 294)",
+        "tonalRamp": [
+          "oklch(0.15 0.018 294)",
+          "oklch(0.27 0.018 294)",
+          "oklch(0.38 0.018 294)",
+          "oklch(0.47 0.018 294)",
+          "oklch(0.60 0.018 294)",
+          "oklch(0.73 0.018 294)",
+          "oklch(0.85 0.018 294)",
+          "oklch(0.95 0.018 294)"
+        ]
+      },
+      "structural-line": {
+        "role": "neutral",
+        "displayName": "Structural Line",
+        "canonical": "oklch(0.89 0.012 294)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 294)",
+          "oklch(0.27 0.012 294)",
+          "oklch(0.40 0.012 294)",
+          "oklch(0.54 0.012 294)",
+          "oklch(0.68 0.012 294)",
+          "oklch(0.78 0.012 294)",
+          "oklch(0.89 0.012 294)",
+          "oklch(0.95 0.012 294)"
+        ]
+      },
+      "confirmed-green": {
+        "role": "tertiary",
+        "displayName": "Confirmed Green",
+        "canonical": "oklch(0.48 0.12 155)",
+        "tonalRamp": [
+          "oklch(0.15 0.05 155)",
+          "oklch(0.26 0.08 155)",
+          "oklch(0.37 0.11 155)",
+          "oklch(0.48 0.12 155)",
+          "oklch(0.60 0.10 155)",
+          "oklch(0.72 0.08 155)",
+          "oklch(0.84 0.05 155)",
+          "oklch(0.95 0.03 155)"
+        ]
+      },
+      "caution-amber": {
+        "role": "tertiary",
+        "displayName": "Caution Amber",
+        "canonical": "oklch(0.56 0.13 72)",
+        "tonalRamp": [
+          "oklch(0.15 0.05 72)",
+          "oklch(0.27 0.08 72)",
+          "oklch(0.40 0.11 72)",
+          "oklch(0.56 0.13 72)",
+          "oklch(0.66 0.11 72)",
+          "oklch(0.76 0.08 72)",
+          "oklch(0.86 0.05 72)",
+          "oklch(0.96 0.03 72)"
+        ]
+      },
+      "stop-red": {
+        "role": "tertiary",
+        "displayName": "Stop Red",
+        "canonical": "oklch(0.50 0.17 28)",
+        "tonalRamp": [
+          "oklch(0.15 0.06 28)",
+          "oklch(0.27 0.10 28)",
+          "oklch(0.39 0.14 28)",
+          "oklch(0.50 0.17 28)",
+          "oklch(0.62 0.14 28)",
+          "oklch(0.73 0.10 28)",
+          "oklch(0.84 0.06 28)",
+          "oklch(0.95 0.03 28)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Page Headline",
+        "purpose": "Page identity only; never a vanity metric."
+      },
+      "title": {
+        "displayName": "Operational Title",
+        "purpose": "Section and editor headings."
+      },
+      "body": {
+        "displayName": "Explanatory Body",
+        "purpose": "Direct descriptions and consequential copy."
+      },
+      "label": {
+        "displayName": "Compact Label",
+        "purpose": "Fields, metadata, state, and controls."
+      }
+    },
+    "shadows": [
+      {
+        "name": "dialog-lift",
+        "value": "0 6px 8px oklch(0.12 0.02 294 / 0.20)",
+        "purpose": "Confirmation dialog only."
+      },
+      {
+        "name": "field-focus",
+        "value": "0 0 0 3px oklch(0.94 0.028 294)",
+        "purpose": "Focus reinforcement on fields."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-responsive",
+        "value": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Default state feedback."
+      },
+      {
+        "name": "color-feedback",
+        "value": "180ms",
+        "purpose": "Hover and selection color transitions."
+      },
+      {
+        "name": "press-feedback",
+        "value": "120ms",
+        "purpose": "One-pixel button press response."
+      }
+    ],
+    "breakpoints": [
+      { "name": "icon-rail", "value": "960px" },
+      { "name": "single-column", "value": "680px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one clear next action on a surface.",
+      "html": "<button class=\"ds-btn-primary\">确认并启动</button>",
+      "css": ".ds-btn-primary { min-height: 38px; border: 0; border-radius: 8px; padding: 0 14px; background: oklch(0.46 0.12 294); color: oklch(1 0 0); font: 650 13px Inter, system-ui, sans-serif; transition: background 180ms cubic-bezier(0.22,1,0.36,1), transform 120ms cubic-bezier(0.22,1,0.36,1); } .ds-btn-primary:hover { background: oklch(0.40 0.13 294); } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: 3px solid oklch(0.70 0.13 294 / 0.65); outline-offset: 2px; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Routine action that does not compete with the primary path.",
+      "html": "<button class=\"ds-btn-quiet\">导出配置</button>",
+      "css": ".ds-btn-quiet { min-height: 38px; border: 0; border-radius: 8px; padding: 0 14px; background: oklch(0.945 0.012 294); color: oklch(0.22 0.02 294); font: 650 13px Inter, system-ui, sans-serif; transition: background 180ms cubic-bezier(0.22,1,0.36,1); } .ds-btn-quiet:hover { background: oklch(0.91 0.015 294); } .ds-btn-quiet:focus-visible { outline: 3px solid oklch(0.70 0.13 294 / 0.65); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Compact operational input with explicit focus.",
+      "html": "<label class=\"ds-field\"><span>方案名称</span><input value=\"北京 Go\"></label>",
+      "css": ".ds-field { display: grid; gap: 7px; color: oklch(0.22 0.02 294); font: 650 12px Inter, system-ui, sans-serif; } .ds-field input { width: 260px; height: 40px; border: 1px solid oklch(0.89 0.012 294); border-radius: 8px; background: oklch(1 0 0); color: oklch(0.22 0.02 294); padding: 9px 10px; font: 400 14px Inter, system-ui, sans-serif; } .ds-field input:focus { outline: none; border-color: oklch(0.46 0.12 294); box-shadow: 0 0 0 3px oklch(0.94 0.028 294); }"
+    },
+    {
+      "name": "Active Navigation Item",
+      "kind": "nav",
+      "description": "Current destination in the quiet sidebar.",
+      "html": "<button class=\"ds-nav-active\">搜索方案</button>",
+      "css": ".ds-nav-active { width: 180px; min-height: 40px; border: 0; border-radius: 8px; padding: 10px 11px; text-align: left; background: oklch(0.94 0.028 294); color: oklch(0.46 0.12 294); font: 650 14px Inter, system-ui, sans-serif; } .ds-nav-active:hover { background: oklch(0.945 0.012 294); } .ds-nav-active:focus-visible { outline: 3px solid oklch(0.70 0.13 294 / 0.65); outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "status-chip",
+      "description": "Text-first state cue reinforced by semantic tone.",
+      "html": "<span class=\"ds-status-chip\">扫描</span>",
+      "css": ".ds-status-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 0 9px; border-radius: 999px; background: oklch(0.94 0.028 294); color: oklch(0.46 0.12 294); font: 680 11px Inter, system-ui, sans-serif; }"
+    },
+    {
+      "name": "Dispatch Panel",
+      "kind": "custom",
+      "description": "The sole high-contrast surface for batch limits and start action.",
+      "html": "<section class=\"ds-dispatch\"><small>下一批</small><strong>最多成功沟通 20 个职位</strong><span>达到 200 个候选职位或触发停机条件时结束。</span></section>",
+      "css": ".ds-dispatch { width: 460px; display: grid; gap: 8px; border-radius: 12px; padding: 28px; background: oklch(0.22 0.02 294); color: oklch(0.98 0.004 294); font-family: Inter, system-ui, sans-serif; } .ds-dispatch small { color: oklch(0.74 0.07 294); font-size: 11px; } .ds-dispatch strong { font-size: 22px; letter-spacing: -0.025em; } .ds-dispatch span { color: oklch(0.80 0.015 294); font-size: 13px; line-height: 1.6; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Dispatch Desk",
+    "overview": "JobPilot feels like a carefully arranged desk for supervising consequential work: calm, legible, and continuously ready. The interface is a product surface, not a performance; automation state, risk, limits, and human control take precedence over decoration.",
+    "keyCharacteristics": [
+      "Restrained information density with strong alignment",
+      "Consequential actions separated from routine controls",
+      "State conveyed through text, shape, and color together",
+      "Responsive feedback without choreographed entrances"
+    ],
+    "rules": [
+      {
+        "name": "The One Signal Rule",
+        "body": "Saturated dispatch indigo is limited to the current selection, the primary action, and active system state. It is never background decoration.",
+        "section": "colors"
+      },
+      {
+        "name": "The Three Consequences Rule",
+        "body": "Green confirms, amber requests attention, and red stops. Every use also carries a word, icon, or shape so color is never the only signal.",
+        "section": "colors"
+      },
+      {
+        "name": "The Operational Voice Rule",
+        "body": "Headings identify tasks and state; they never become oversized marketing statements. Labels use sentence case and remain readable at 200% zoom.",
+        "section": "typography"
+      },
+      {
+        "name": "The State Earns Depth Rule",
+        "body": "Resting content does not float. Elevation appears only when interaction or stacking requires it.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep current batch state and stop controls continuously visible in the 64px sticky operation bar.",
+      "Do explain risky actions in direct Chinese before the user confirms them.",
+      "Do use dispatch indigo on no more than ten percent of a screen.",
+      "Do preserve keyboard operation, visible focus, non-color state cues, 200% zoom, and reduced motion.",
+      "Do use restrained 120–180ms state transitions only for meaningful feedback."
+    ],
+    "donts": [
+      "Don't resemble a traditional enterprise admin dashboard.",
+      "Don't use neon cyberpunk control rooms, AI gradients, glass effects, or decorative ‘agent thinking’ theatrics.",
+      "Don't introduce oversized vanity metrics, stacked card grids, or cards nested inside cards.",
+      "Don't use purple gradients; dispatch indigo is a sparse flat signal, never ambient decoration.",
+      "Don't make risky automation feel playful, frictionless, or reversible when it is not."
+    ]
+  }
+}
