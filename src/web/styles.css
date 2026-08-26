@@ -834,6 +834,35 @@ td small {
   color: var(--danger);
 }
 
+.preparation-status {
+  display: grid;
+  gap: 4px;
+  width: min(100%, 620px);
+  padding: 11px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.preparation-status small {
+  color: var(--muted);
+}
+.preparation-status.running {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.preparation-status.ready {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.preparation-status.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.preparation-status.error small {
+  color: var(--danger);
+}
+
 .confirm-dialog {
   width: min(520px, calc(100vw - 32px));
   border: 0;

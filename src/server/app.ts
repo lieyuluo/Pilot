@@ -375,32 +375,6 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
     },
   );
 
-  server.post<{ Params: { requestId: string } }>(
-    "/api/extension/pairings/:requestId/approve",
-    {
-      schema: {
-        params: Type.Object({
-          requestId: Type.String({ minLength: 1, maxLength: 100 }),
-        }),
-      },
-    },
-    async (request, reply) => {
-      if (dependencies.extensionBridge === undefined) {
-        return reply.code(501).send({ error: "当前运行环境未配置扩展桥" });
-      }
-      try {
-        await dependencies.extensionBridge.approvePairing(
-          request.params.requestId,
-        );
-        return { paired: true };
-      } catch (error) {
-        return reply.code(409).send({
-          error: error instanceof Error ? error.message : "无法批准扩展配对",
-        });
-      }
-    },
-  );
-
   server.post("/api/extension/pairing/reset", async (_request, reply) => {
     if (dependencies.extensionBridge === undefined) {
       return reply.code(501).send({ error: "当前运行环境未配置扩展桥" });
@@ -410,7 +384,9 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
         dependencies.batchRunner.getState(),
       )
     ) {
-      return reply.code(409).send({ error: "投递批次运行期间不能重置配对" });
+      return reply
+        .code(409)
+        .send({ error: "投递批次运行期间不能重置扩展授权" });
     }
     dependencies.extensionBridge.resetPairing();
     return { reset: true };
@@ -444,38 +420,6 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
       return reply.code(204).send();
     },
   );
-
-  server.post("/api/calibration/boss", async (_request, reply) => {
-    if (dependencies.extensionBridge === undefined) {
-      return reply.code(501).send({ error: "当前运行环境未配置 Chrome 扩展" });
-    }
-    if (
-      !["空闲", "已完成", "已完成有异常", "人工接管", "已失败"].includes(
-        dependencies.batchRunner.getState(),
-      )
-    ) {
-      return reply.code(409).send({ error: "投递批次运行期间不能开始校准" });
-    }
-    const plan = dependencies.store
-      .listSearchPlans()
-      .find((item) => item.enabled);
-    if (plan === undefined) {
-      return reply.code(422).send({ error: "请先启用至少一个搜索方案" });
-    }
-    try {
-      const result = await dependencies.extensionBridge.calibrate(plan);
-      const settings = readAppSettings(dependencies.store);
-      dependencies.store.setSetting("app", {
-        ...settings,
-        realSendEnabled: false,
-      });
-      return { calibrated: true, ...result };
-    } catch (error) {
-      return reply.code(409).send({
-        error: error instanceof Error ? error.message : "Boss 只读校准失败",
-      });
-    }
-  });
 
   server.post<{ Body: { planIds: string[]; accountConfirmed: boolean } }>(
     "/api/batches",
@@ -621,10 +565,15 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
   function extensionStatus(): ExtensionStatus {
     return (
       dependencies.extensionBridge?.getStatus() ?? {
-        pairingState: "未配对",
+        pairingState: "未授权",
         connectionState: "未连接",
         capabilities: [],
         readOnlyCalibrated: false,
+        preparation: {
+          state: "idle",
+          stage: "connecting",
+          message: "等待连接当前页面",
+        },
       }
     );
   }

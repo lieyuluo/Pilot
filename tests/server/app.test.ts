@@ -179,7 +179,7 @@ describe("JobPilot API", () => {
     expect(openapi.json()).toHaveProperty("openapi");
   });
 
-  it("只读校准通过后仍保持真实发送关闭", async () => {
+  it("不再公开独立的只读校准入口", async () => {
     const directory = mkdtempSync(join(tmpdir(), "jobpilot-api-"));
     const store = openJobPilotStore(join(directory, "jobpilot.db"));
     store.saveSearchPlan({
@@ -200,7 +200,7 @@ describe("JobPilot API", () => {
       store,
       extensionBridge: extensionBridgeStub({
         status: {
-          pairingState: "已配对",
+          pairingState: "已授权",
           connectionState: "页面已连接",
           capabilities: ["read", "batch-send"],
           readOnlyCalibrated: true,
@@ -264,12 +264,7 @@ describe("JobPilot API", () => {
     });
 
     expect(forgedSendUnlock.statusCode).toBe(409);
-    expect(calibrated.json()).toEqual({
-      calibrated: true,
-      candidatesRecognized: 12,
-      currentUrl: "https://www.zhipin.com/job_detail/abc.html",
-      contactState: "可沟通",
-    });
+    expect(calibrated.statusCode).toBe(404);
     expect(settings.json()).toMatchObject({ realSendEnabled: false });
     expect(settings.json()).not.toHaveProperty("readOnlySmokePassed");
   });
@@ -304,7 +299,7 @@ describe("JobPilot API", () => {
       },
     });
     const extensionStatus: ExtensionStatus = {
-      pairingState: "已配对",
+      pairingState: "已授权",
       connectionState: "页面已连接",
       capabilities: ["read", "batch-send"],
       readOnlyCalibrated: false,
@@ -398,22 +393,17 @@ describe("JobPilot API", () => {
     });
   });
 
-  it("公开扩展配对请求并只允许批准当前请求", async () => {
+  it("公开扩展授权状态但不提供手工批准入口", async () => {
     const directory = mkdtempSync(join(tmpdir(), "jobpilot-api-"));
     const store = openJobPilotStore(join(directory, "jobpilot.db"));
-    let approvedRequestId: string | undefined;
     const server = buildServer({
       store,
       extensionBridge: extensionBridgeStub({
         status: {
-          pairingState: "等待批准",
+          pairingState: "等待授权",
           connectionState: "未连接",
           capabilities: ["read"],
           readOnlyCalibrated: false,
-          pendingPairing: { requestId: "pair-1", code: "123456" },
-        },
-        approvePairing: async (requestId) => {
-          approvedRequestId = requestId;
         },
       }),
       batchRunner: {
@@ -452,11 +442,9 @@ describe("JobPilot API", () => {
     });
 
     expect(status.json()).toMatchObject({
-      pairingState: "等待批准",
-      pendingPairing: { requestId: "pair-1", code: "123456" },
+      pairingState: "等待授权",
     });
-    expect(approved.json()).toEqual({ paired: true });
-    expect(approvedRequestId).toBe("pair-1");
+    expect(approved.statusCode).toBe(404);
   });
 
   it("WebSocket 桥拒绝普通网页来源", async () => {
@@ -466,7 +454,7 @@ describe("JobPilot API", () => {
       store,
       extensionBridge: extensionBridgeStub({
         status: {
-          pairingState: "未配对",
+          pairingState: "未授权",
           connectionState: "未连接",
           capabilities: [],
           readOnlyCalibrated: false,
@@ -507,7 +495,7 @@ describe("JobPilot API", () => {
       store,
       extensionBridge: extensionBridgeStub({
         status: {
-          pairingState: "未配对",
+          pairingState: "未授权",
           connectionState: "未连接",
           capabilities: [],
           readOnlyCalibrated: false,
@@ -553,13 +541,11 @@ describe("JobPilot API", () => {
 function extensionBridgeStub(options: {
   status: ExtensionStatus;
   attach?: (socket: BridgeSocket) => void;
-  approvePairing?: (requestId: string) => Promise<void>;
   calibrate?: ExtensionBridge["calibrate"];
 }): ExtensionBridge {
   return {
     attach: options.attach ?? (() => undefined),
     getStatus: () => options.status,
-    approvePairing: options.approvePairing ?? (async () => undefined),
     resetPairing: () => undefined,
     calibrate:
       options.calibrate ??

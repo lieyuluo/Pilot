@@ -1,6 +1,6 @@
 :root {
-  color: #18201d;
-  background: #f4f7f5;
+  color: oklch(0.22 0.02 294);
+  background: oklch(0.975 0.006 294);
   font:
     14px/1.45 Inter,
     "Microsoft YaHei",
@@ -37,22 +37,41 @@ section {
   place-items: center;
   border-radius: 10px;
   color: white;
-  background: #1c7c57;
+  background: oklch(0.46 0.12 294);
   font-weight: 800;
 }
 
 small,
 p {
   margin: 0;
-  color: #607069;
+  color: oklch(0.47 0.018 294);
 }
 
 section {
   min-height: 54px;
   padding: 12px;
-  border: 1px solid #dce5e0;
+  border: 1px solid oklch(0.89 0.012 294);
   border-radius: 10px;
   background: white;
+}
+
+section[data-tone="active"] {
+  background: oklch(0.94 0.028 294);
+}
+
+section[data-tone="success"] {
+  color: oklch(0.42 0.12 155);
+  background: oklch(0.95 0.035 155);
+}
+
+section[data-tone="danger"] {
+  color: oklch(0.5 0.17 28);
+  background: oklch(0.95 0.04 28);
+}
+
+section p {
+  margin-top: 4px;
+  line-height: 1.55;
 }
 
 button {
@@ -60,20 +79,48 @@ button {
   border: 0;
   border-radius: 9px;
   color: white;
-  background: #176d4d;
+  background: oklch(0.46 0.12 294);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
 }
 
 button.danger {
-  color: #9c2f2f;
-  background: #fae9e9;
+  color: oklch(0.5 0.17 28);
+  background: oklch(0.95 0.04 28);
+}
+
+button:hover:not(:disabled) {
+  background: oklch(0.4 0.13 294);
+}
+
+button.danger:hover:not(:disabled) {
+  background: oklch(0.91 0.06 28);
+}
+
+button:focus-visible {
+  outline: 3px solid oklch(0.7 0.13 294 / 0.65);
+  outline-offset: 2px;
 }
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 1;
+}
+
+#connect[data-state="running"] {
+  color: white;
+  background: oklch(0.54 0.1 294);
+}
+
+#connect[data-state="ready"] {
+  color: oklch(0.42 0.12 155);
+  background: oklch(0.95 0.035 155);
+}
+
+button.danger:disabled {
+  color: oklch(0.47 0.018 294);
+  background: oklch(0.945 0.012 294);
 }
 
 .footnote {

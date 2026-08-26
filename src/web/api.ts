@@ -71,13 +71,25 @@ export interface AppSettings {
 export type ExtensionCapability = "read" | "batch-send";
 
 export interface ExtensionStatus {
-  pairingState: "未配对" | "等待批准" | "已配对";
+  pairingState: "未授权" | "等待授权" | "已授权";
   connectionState: "未连接" | "扩展已连接" | "页面已连接";
   extensionVersion?: string;
   adapterVersion?: number;
   capabilities: ExtensionCapability[];
   readOnlyCalibrated: boolean;
-  pendingPairing?: { requestId: string; code: string };
+  preparation?: {
+    state: "idle" | "running" | "ready" | "error";
+    stage:
+      | "connecting"
+      | "authorizing"
+      | "binding"
+      | "calibrating"
+      | "returning"
+      | "ready";
+    message: string;
+    error?: string;
+    warning?: string;
+  };
   page?: {
     tabId: number;
     url: string;

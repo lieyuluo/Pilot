@@ -54,6 +54,7 @@ export function App() {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const confirmDialog = useRef<HTMLDialogElement>(null);
+  const extensionPreparationState = useRef<string | undefined>(undefined);
 
   const load = useCallback(async () => {
     try {
@@ -107,6 +108,33 @@ export function App() {
     };
     stream.addEventListener("batch", onBatch as EventListener);
     return () => stream.close();
+  }, [load]);
+
+  useEffect(() => {
+    let mounted = true;
+    const refreshExtension = async () => {
+      try {
+        const next = await api<ExtensionStatus>("/api/extension/status");
+        if (!mounted) return;
+        setExtensionStatus(next);
+        const nextState = next.preparation?.state;
+        if (
+          extensionPreparationState.current !== nextState &&
+          (nextState === "ready" || nextState === "error")
+        ) {
+          void load();
+        }
+        extensionPreparationState.current = nextState;
+      } catch {
+        // The main load path owns local-service error reporting.
+      }
+    };
+    const timer = window.setInterval(() => void refreshExtension(), 2_000);
+    void refreshExtension();
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
   }, [load]);
 
   const active = ![
@@ -1074,7 +1102,6 @@ function SettingsView({
   const [extensionStatus, setExtensionStatus] = useState(
     initialExtensionStatus,
   );
-  const [calibrating, setCalibrating] = useState(false);
   const [calibrationNotice, setCalibrationNotice] = useState<{
     tone: "neutral" | "success" | "danger";
     text: string;
@@ -1088,23 +1115,6 @@ function SettingsView({
     () => setExtensionStatus(initialExtensionStatus),
     [initialExtensionStatus],
   );
-  useEffect(() => {
-    let active = true;
-    const refresh = async () => {
-      try {
-        const status = await api<ExtensionStatus>("/api/extension/status");
-        if (active) setExtensionStatus(status);
-      } catch {
-        // A full-page reload reports local-service errors in the main banner.
-      }
-    };
-    const timer = window.setInterval(() => void refresh(), 2_000);
-    void refresh();
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, []);
   const save = async () => {
     await api("/api/settings", { method: "PUT", body: JSON.stringify(draft) });
     await reload();
@@ -1138,50 +1148,6 @@ function SettingsView({
     setExtensionStatus(status);
     return status;
   };
-  const approvePairing = async () => {
-    const pending = extensionStatus?.pendingPairing;
-    if (!pending) return;
-    setCalibrating(true);
-    setCalibrationNotice(undefined);
-    try {
-      await api(`/api/extension/pairings/${pending.requestId}/approve`, {
-        method: "POST",
-      });
-      await refreshExtensionStatus();
-      setCalibrationNotice({
-        tone: "success",
-        text: "扩展已配对。请在已登录的 BOSS 标签页中打开扩展并连接当前页面。",
-      });
-    } catch (caught) {
-      setCalibrationNotice({ tone: "danger", text: messageOf(caught) });
-    } finally {
-      setCalibrating(false);
-    }
-  };
-  const calibrateBoss = async () => {
-    setCalibrating(true);
-    setCalibrationNotice(undefined);
-    try {
-      const result = await api<{
-        calibrated: true;
-        candidatesRecognized: number;
-      }>("/api/calibration/boss", {
-        method: "POST",
-      });
-      await Promise.all([reload(), refreshExtensionStatus()]);
-      setCalibrationNotice({
-        tone: "success",
-        text: `只读校准通过，识别到 ${result.candidatesRecognized} 个候选职位。`,
-      });
-    } catch (caught) {
-      setCalibrationNotice({
-        tone: "danger",
-        text: `${messageOf(caught)} 请确认已连接的 BOSS 页面仍处于登录状态。`,
-      });
-    } finally {
-      setCalibrating(false);
-    }
-  };
   const disconnectPage = async () => {
     try {
       await api("/api/extension/disconnect", { method: "POST" });
@@ -1192,11 +1158,11 @@ function SettingsView({
     }
   };
   const resetPairing = async () => {
-    if (!window.confirm("重置后需要重新核对配对码，确认继续吗？")) return;
+    if (!window.confirm("重置后需要重新从扩展授权，确认继续吗？")) return;
     try {
       await api("/api/extension/pairing/reset", { method: "POST" });
       await refreshExtensionStatus();
-      setCalibrationNotice({ tone: "neutral", text: "扩展配对已重置。" });
+      setCalibrationNotice({ tone: "neutral", text: "扩展授权已重置。" });
     } catch (caught) {
       setCalibrationNotice({ tone: "danger", text: messageOf(caught) });
     }
@@ -1341,14 +1307,19 @@ function SettingsView({
               <li>
                 建议新建一个仅用于求职的 Chrome 配置文件，并由本人登录 BOSS。
               </li>
-              <li>打开扩展；首次连接时核对下方配对码并批准。</li>
-              <li>在目标 BOSS 标签页中点击“连接当前页面”，再校准读取能力。</li>
+              <li>在目标 BOSS 标签页打开扩展，点击“连接并检查当前页面”。</li>
             </ol>
             <div className="extension-status-grid" aria-live="polite">
-              <span>扩展配对</span>
+              <span>扩展授权</span>
               <strong>{extensionStatus?.pairingState ?? "正在读取…"}</strong>
-              <span>本机连接</span>
+              <span>页面连接</span>
               <strong>{extensionStatus?.connectionState ?? "正在读取…"}</strong>
+              <span>页面状态</span>
+              <strong>
+                {extensionStatus?.readOnlyCalibrated
+                  ? "页面已就绪"
+                  : "尚未就绪"}
+              </strong>
               <span>页面能力</span>
               <strong>
                 {extensionStatus?.capabilities.includes("read")
@@ -1358,19 +1329,19 @@ function SettingsView({
                   : "尚未报告"}
               </strong>
             </div>
-            {extensionStatus?.pendingPairing && (
-              <div className="pairing-panel">
-                <div>
-                  <span>请与扩展弹窗核对配对码</span>
-                  <strong>{extensionStatus.pendingPairing.code}</strong>
-                </div>
-                <button
-                  className="button primary"
-                  disabled={calibrating}
-                  onClick={() => void approvePairing()}
-                >
-                  批准此扩展
-                </button>
+            {extensionStatus?.preparation && (
+              <div
+                className={`preparation-status ${extensionStatus.preparation.state}`}
+                role="status"
+                aria-live="polite"
+              >
+                <strong>{extensionStatus.preparation.message}</strong>
+                {extensionStatus.preparation.error && (
+                  <small>{extensionStatus.preparation.error}</small>
+                )}
+                {extensionStatus.preparation.warning && (
+                  <small>{extensionStatus.preparation.warning}</small>
+                )}
               </div>
             )}
             {extensionStatus?.page && (
@@ -1389,16 +1360,6 @@ function SettingsView({
                 </button>
               </div>
             )}
-            <button
-              className="button quiet calibration-button"
-              disabled={
-                calibrating || extensionStatus?.connectionState !== "页面已连接"
-              }
-              onClick={() => void calibrateBoss()}
-            >
-              <Gauge size={16} />
-              {calibrating ? "正在校准…" : "校准页面读取"}
-            </button>
             {calibrationNotice && (
               <div
                 className={`calibration-notice ${calibrationNotice.tone}`}
@@ -1415,9 +1376,9 @@ function SettingsView({
                 readOnly
               />
               <span>
-                <strong>只读校准已经通过</strong>
+                <strong>当前页面已经就绪</strong>
                 <small>
-                  只对当前已连接页面有效；页面断开或重新配对后需重新校准。
+                  扩展授权、页面连接和只读校准均已完成；尚未建立发送会话。
                 </small>
               </span>
             </label>
@@ -1465,12 +1426,12 @@ function SettingsView({
                 重置本机发送资格
               </button>
             )}
-            {extensionStatus?.pairingState === "已配对" && (
+            {extensionStatus?.pairingState === "已授权" && (
               <button
                 className="button danger-quiet"
                 onClick={() => void resetPairing()}
               >
-                重置扩展配对
+                重置扩展授权
               </button>
             )}
           </div>

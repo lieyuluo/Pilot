@@ -1,7 +1,6 @@
 import {
   createHmac,
   randomBytes,
-  randomInt,
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
@@ -20,6 +19,7 @@ import {
   type ExtensionStatus,
   type ExtensionToServerMessage,
   type InspectPositionResult,
+  type PagePreparationStatus,
   type ScanPlanResult,
   type SendOpeningExecutionResult,
   type ServerToExtensionMessage,
@@ -52,7 +52,7 @@ export interface BridgeSocket {
 export interface ExtensionBridge {
   attach(socket: BridgeSocket): void;
   getStatus(): ExtensionStatus;
-  approvePairing(requestId: string): Promise<void>;
+  setPreparationHandler?(handler: () => Promise<SearchPlan>): void;
   resetPairing(): void;
   calibrate(plan: SearchPlan): Promise<CalibrationResult>;
   scan(plan: SearchPlan): Promise<ScanPlanResult>;
@@ -83,9 +83,7 @@ interface ActiveConnection {
   readOnlyCalibrated: boolean;
 }
 
-interface PendingPairing {
-  requestId: string;
-  code: string;
+interface PendingAuthorization {
   instanceId: string;
 }
 
@@ -104,7 +102,15 @@ export function createExtensionBridge(
   const now = options.now ?? (() => new Date());
   const commandTimeoutMs = options.commandTimeoutMs ?? 60_000;
   let active: ActiveConnection | undefined;
-  let pendingPairing: PendingPairing | undefined;
+  let pendingAuthorization: PendingAuthorization | undefined;
+  let preparationHandler: (() => Promise<SearchPlan>) | undefined;
+  let preparationPromise: Promise<void> | undefined;
+  let preparationTabId: number | undefined;
+  let preparation: PagePreparationStatus = {
+    state: "idle",
+    stage: "connecting",
+    message: "等待从目标 BOSS 页面发起连接",
+  };
   const pendingCommands = new Map<string, PendingCommand>();
   const heartbeatSweep = setInterval(() => {
     if (active !== undefined && Date.now() - active.lastSeenAt > 15_000) {
@@ -130,9 +136,7 @@ export function createExtensionBridge(
       };
       send(socket, {
         type: "challenge",
-        // Keep the v1 handshake envelope so an installed v1 extension can
-        // authenticate for read-only use; hello negotiates the real protocol.
-        protocolVersion: 1,
+        protocolVersion: EXTENSION_PROTOCOL_VERSION,
         nonce: active.nonce,
       });
       socket.on("message", async (raw) => {
@@ -149,10 +153,10 @@ export function createExtensionBridge(
       return {
         pairingState:
           pairing !== undefined
-            ? "已配对"
-            : pendingPairing === undefined
-              ? "未配对"
-              : "等待批准",
+            ? "已授权"
+            : pendingAuthorization === undefined
+              ? "未授权"
+              : "等待授权",
         connectionState:
           active?.authenticated !== true
             ? "未连接"
@@ -167,43 +171,21 @@ export function createExtensionBridge(
           : { adapterVersion: active.adapterVersion }),
         capabilities: [...(active?.capabilities ?? [])],
         readOnlyCalibrated: active?.readOnlyCalibrated ?? false,
-        ...(pendingPairing === undefined
-          ? {}
-          : {
-              pendingPairing: {
-                requestId: pendingPairing.requestId,
-                code: pendingPairing.code,
-              },
-            }),
+        preparation: { ...preparation },
         ...(active?.page === undefined ? {} : { page: { ...active.page } }),
       } satisfies ExtensionStatus;
     },
-    async approvePairing(requestId) {
-      if (
-        active === undefined ||
-        pendingPairing === undefined ||
-        pendingPairing.requestId !== requestId
-      ) {
-        throw new Error("配对请求不存在或已经失效");
-      }
-      const pairingSecret = randomBytes(32).toString("base64url");
-      options.settings.setSetting<ExtensionPairingRecord>(PAIRING_SETTING_KEY, {
-        instanceId: pendingPairing.instanceId,
-        pairingSecret,
-        approvedAt: now().toISOString(),
-      });
-      active.authenticated = true;
-      active.connectionId = randomUUID();
-      pendingPairing = undefined;
-      send(active.socket, {
-        type: "pairing_accepted",
-        pairingSecret,
-        connectionId: active.connectionId,
-      });
+    setPreparationHandler(handler) {
+      preparationHandler = handler;
     },
     resetPairing() {
       options.settings.setSetting<null>(PAIRING_SETTING_KEY, null);
-      pendingPairing = undefined;
+      pendingAuthorization = undefined;
+      setPreparation({
+        state: "idle",
+        stage: "connecting",
+        message: "扩展授权已重置",
+      });
       if (active !== undefined) {
         send(active.socket, { type: "disarm", reason: "扩展配对已重置" });
         active.socket.close(4401, "扩展配对已重置");
@@ -211,11 +193,7 @@ export function createExtensionBridge(
       disconnectActive("扩展配对已重置");
     },
     calibrate(plan) {
-      return executePageCommand<CalibrationResult>("read", (base) => ({
-        ...base,
-        type: "calibrate",
-        searchUrl: searchUrlFor(plan),
-      }));
+      return executeCalibration(plan, commandTimeoutMs);
     },
     scan(plan) {
       return executePageCommand<ScanPlanResult>("read", (base) => ({
@@ -291,6 +269,7 @@ export function createExtensionBridge(
       expectedUrl: string;
       deadline: string;
     }) => ExtensionCommand,
+    timeoutMs = commandTimeoutMs,
   ): Promise<T> {
     if (pendingCommands.size > 0) {
       return Promise.reject(new Error("已有扩展页面命令正在执行"));
@@ -304,7 +283,7 @@ export function createExtensionBridge(
       connectionId: connection.connectionId!,
       expectedTabId: connection.page!.tabId,
       expectedUrl: connection.page!.url,
-      deadline: new Date(Date.now() + commandTimeoutMs).toISOString(),
+      deadline: new Date(Date.now() + timeoutMs).toISOString(),
     });
     const legacyCalibration =
       connection.adapterVersion === 1 && command.type === "calibrate";
@@ -318,7 +297,7 @@ export function createExtensionBridge(
       const timeout = setTimeout(() => {
         pendingCommands.delete(command.commandId);
         reject(new Error(`扩展 ${command.type} 命令超时`));
-      }, commandTimeoutMs);
+      }, timeoutMs);
       pendingCommands.set(command.commandId, {
         kind: command.type,
         timeout,
@@ -329,6 +308,21 @@ export function createExtensionBridge(
       });
       send(connection.socket, { type: "command", command });
     });
+  }
+
+  function executeCalibration(
+    plan: SearchPlan,
+    timeoutMs: number,
+  ): Promise<CalibrationResult> {
+    return executePageCommand<CalibrationResult>(
+      "read",
+      (base) => ({
+        ...base,
+        type: "calibrate",
+        searchUrl: searchUrlFor(plan),
+      }),
+      timeoutMs,
+    );
   }
 
   async function receive(raw: unknown): Promise<void> {
@@ -373,29 +367,15 @@ export function createExtensionBridge(
       receiveHello(message);
       return;
     }
+    if (message.type === "prepare_page") {
+      startPagePreparation(message.tab);
+      return;
+    }
     if (!active.authenticated) {
       send(active.socket, {
         type: "error",
         code: "not_authenticated",
         message: "扩展尚未完成配对认证",
-      });
-      return;
-    }
-    if (message.type === "bind_page") {
-      if (!isBossUrl(message.tab.url)) {
-        send(active.socket, {
-          type: "error",
-          code: "unsupported_page",
-          message: "只能连接 Boss 官方页面",
-        });
-        return;
-      }
-      active.page = { ...message.tab };
-      active.readOnlyCalibrated = false;
-      send(active.socket, {
-        type: "page_bound",
-        connectionId: active.connectionId!,
-        tabId: message.tab.tabId,
       });
       return;
     }
@@ -413,12 +393,32 @@ export function createExtensionBridge(
       } else {
         delete active.page;
         active.readOnlyCalibrated = false;
+        setPreparation({
+          state: "idle",
+          stage: "connecting",
+          message: "当前页面连接已失效",
+        });
+      }
+      return;
+    }
+    if (message.type === "preparation_progress") {
+      if (preparation.state === "running" && message.stage === "returning") {
+        setPreparation({
+          state: "running",
+          stage: "returning",
+          message: "正在返回搜索列表…",
+        });
       }
       return;
     }
     if (message.type === "emergency_stop") {
       delete active.page;
       active.readOnlyCalibrated = false;
+      setPreparation({
+        state: "idle",
+        stage: "connecting",
+        message: "页面连接已解除",
+      });
       rejectPending(message.reason ?? "扩展已经紧急停止");
       return;
     }
@@ -429,12 +429,16 @@ export function createExtensionBridge(
     message: Extract<ExtensionToServerMessage, { type: "hello" }>,
   ): void {
     if (active === undefined) return;
-    const legacyReadOnly =
-      message.protocolVersion === 1 && message.adapterVersion === 1;
     const currentProtocol =
       message.protocolVersion === EXTENSION_PROTOCOL_VERSION &&
       message.adapterVersion === BOSS_ADAPTER_VERSION;
-    if (!legacyReadOnly && !currentProtocol) {
+    if (!currentProtocol) {
+      setPreparation({
+        state: "error",
+        stage: "connecting",
+        message: "扩展版本过旧",
+        error: "请重新构建并加载最新扩展",
+      });
       send(active.socket, {
         type: "error",
         code: "version_mismatch",
@@ -447,27 +451,18 @@ export function createExtensionBridge(
     active.instanceId = message.instanceId;
     active.extensionVersion = message.extensionVersion;
     active.adapterVersion = message.adapterVersion;
-    active.capabilities = legacyReadOnly
-      ? message.capabilities.includes("read")
-        ? ["read"]
-        : []
-      : message.capabilities.filter((capability) =>
-          SERVER_CAPABILITIES.includes(
-            capability as (typeof SERVER_CAPABILITIES)[number],
-          ),
-        );
+    active.capabilities = message.capabilities.filter((capability) =>
+      SERVER_CAPABILITIES.includes(
+        capability as (typeof SERVER_CAPABILITIES)[number],
+      ),
+    );
     const pairing = pairingRecord();
     if (pairing === undefined) {
-      pendingPairing = {
-        requestId: randomUUID(),
-        code: randomInt(0, 1_000_000).toString().padStart(6, "0"),
+      pendingAuthorization = {
         instanceId: message.instanceId,
       };
-      send(active.socket, {
-        type: "pairing_required",
-        requestId: pendingPairing.requestId,
-        code: pendingPairing.code,
-      });
+      send(active.socket, { type: "authorization_required" });
+      publishPreparation();
       return;
     }
     if (
@@ -492,6 +487,7 @@ export function createExtensionBridge(
     active.authenticated = true;
     active.connectionId = randomUUID();
     send(active.socket, { type: "ready", connectionId: active.connectionId });
+    publishPreparation();
   }
 
   function receiveCommandResult(
@@ -509,6 +505,10 @@ export function createExtensionBridge(
       return;
     }
     if (message.outcome !== "ok") {
+      const currentUrl = currentUrlFrom(message.data);
+      if (currentUrl !== undefined && active?.page !== undefined) {
+        active.page.url = currentUrl;
+      }
       pending.reject(new Error(message.error ?? "扩展无法完成页面命令"));
       return;
     }
@@ -522,6 +522,146 @@ export function createExtensionBridge(
       active.page.url = currentUrl;
     }
     if (pending.kind === "calibrate") active.readOnlyCalibrated = true;
+  }
+
+  function startPagePreparation(tab: BoundBossPage): void {
+    if (preparationPromise !== undefined) {
+      if (preparationTabId === tab.tabId) publishPreparation();
+      else {
+        send(active!.socket, {
+          type: "error",
+          code: "preparation_busy",
+          message: "另一张 BOSS 页面正在连接并检查",
+        });
+      }
+      return;
+    }
+    if (active?.page !== undefined && active.page.tabId !== tab.tabId) {
+      setPreparation({
+        state: "error",
+        stage: "binding",
+        message: "已有另一张 BOSS 页面保持连接",
+        error: "请先在 JobPilot 设置页解除现有页面连接",
+      });
+      return;
+    }
+    preparationTabId = tab.tabId;
+    preparationPromise = preparePage(tab).finally(() => {
+      preparationPromise = undefined;
+      preparationTabId = undefined;
+    });
+  }
+
+  async function preparePage(tab: BoundBossPage): Promise<void> {
+    const deadline = Date.now() + 90_000;
+    try {
+      if (!isBossUrl(tab.url)) throw new Error("只能连接 Boss 官方页面");
+      if (preparationHandler === undefined) {
+        throw new Error("本机 JobPilot 尚未配置页面准备流程");
+      }
+      setPreparation({
+        state: "running",
+        stage: "authorizing",
+        message: "正在授权扩展…",
+      });
+      const plan = await preparationHandler();
+      if (active === undefined) throw new Error("扩展连接已经断开");
+      if (!active.authenticated) authorizeCurrentExtension();
+      if (active.page?.tabId === tab.tabId && active.readOnlyCalibrated) {
+        setPreparation({
+          state: "ready",
+          stage: "ready",
+          message: "页面已就绪",
+        });
+        return;
+      }
+
+      setPreparation({
+        state: "running",
+        stage: "binding",
+        message: "正在连接当前页面…",
+      });
+      active.page = { ...tab };
+      active.readOnlyCalibrated = false;
+      send(active.socket, {
+        type: "page_bound",
+        connectionId: active.connectionId!,
+        tabId: tab.tabId,
+      });
+
+      let result: CalibrationResult | undefined;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        setPreparation({
+          state: "running",
+          stage: "calibrating",
+          message:
+            attempt === 0 ? "正在检查页面…" : "页面响应中断，正在重试检查…",
+        });
+        try {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) throw new Error("页面准备流程超时");
+          result = await executeCalibration(plan, Math.min(40_000, remaining));
+          break;
+        } catch (error) {
+          if (attempt > 0 || !isRetryablePreparationError(error)) throw error;
+        }
+      }
+      if (result === undefined) throw new Error("页面只读校准失败");
+      setPreparation({
+        state: "ready",
+        stage: "ready",
+        message: `页面已就绪，识别到 ${result.candidatesRecognized} 个候选职位`,
+        ...(result.returnWarning === undefined
+          ? {}
+          : { warning: result.returnWarning }),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "页面准备失败";
+      setPreparation({
+        state: "error",
+        stage: preparation.stage,
+        message: "页面尚未就绪",
+        error: message,
+      });
+    }
+  }
+
+  function authorizeCurrentExtension(): void {
+    if (
+      active === undefined ||
+      pendingAuthorization === undefined ||
+      active.instanceId !== pendingAuthorization.instanceId
+    ) {
+      throw new Error("扩展授权请求不存在或已经失效");
+    }
+    const pairingSecret = randomBytes(32).toString("base64url");
+    options.settings.setSetting<ExtensionPairingRecord>(PAIRING_SETTING_KEY, {
+      instanceId: pendingAuthorization.instanceId,
+      pairingSecret,
+      approvedAt: now().toISOString(),
+    });
+    active.authenticated = true;
+    active.connectionId = randomUUID();
+    pendingAuthorization = undefined;
+    send(active.socket, {
+      type: "pairing_accepted",
+      pairingSecret,
+      connectionId: active.connectionId,
+    });
+  }
+
+  function setPreparation(status: PagePreparationStatus): void {
+    preparation = status;
+    publishPreparation();
+  }
+
+  function publishPreparation(): void {
+    if (active !== undefined) {
+      send(active.socket, {
+        type: "preparation_state",
+        status: { ...preparation },
+      });
+    }
   }
 
   function requireBoundConnection(): ActiveConnection {
@@ -545,7 +685,9 @@ export function createExtensionBridge(
 
   function disconnectActive(reason: string): void {
     active = undefined;
-    pendingPairing = undefined;
+    pendingAuthorization = undefined;
+    preparationPromise = undefined;
+    preparationTabId = undefined;
     rejectPending(reason);
   }
 
@@ -589,6 +731,19 @@ function rawToString(raw: unknown): string {
   return String(raw);
 }
 
+function currentUrlFrom(value: unknown): string | undefined {
+  if (!isRecord(value) || typeof value.currentUrl !== "string")
+    return undefined;
+  return isBossUrl(value.currentUrl) ? value.currentUrl : undefined;
+}
+
+function isRetryablePreparationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return !/登录|验证|风控|版本|不兼容|结构不受支持|未识别到|只能连接|页面已经变化|不属于当前|已有/.test(
+    message,
+  );
+}
+
 function parseClientMessage(value: unknown): ExtensionToServerMessage {
   if (!isRecord(value) || typeof value.type !== "string") {
     throw new Error("扩展消息缺少类型");
@@ -609,9 +764,15 @@ function parseClientMessage(value: unknown): ExtensionToServerMessage {
     }
     return value as unknown as ExtensionToServerMessage;
   }
-  if (value.type === "bind_page" || value.type === "page_state") {
+  if (value.type === "prepare_page" || value.type === "page_state") {
     if (!isBoundPage(value.tab)) throw new Error("扩展页面状态格式无效");
     return value as unknown as ExtensionToServerMessage;
+  }
+  if (value.type === "preparation_progress") {
+    if (value.stage !== "returning") {
+      throw new Error("扩展页面准备进度格式无效");
+    }
+    return { type: "preparation_progress", stage: "returning" };
   }
   if (value.type === "command_result") {
     if (

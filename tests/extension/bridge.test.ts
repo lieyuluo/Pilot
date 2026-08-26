@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createExtensionBridge } from "../../src/extension/bridge.ts";
 import {
@@ -17,6 +17,20 @@ describe("Chrome extension bridge", () => {
       commandTimeoutMs: 1_000,
     });
     const socket = new FakeSocket();
+    bridge.setPreparationHandler?.(async () => ({
+      id: "go-beijing",
+      name: "北京 Go",
+      enabled: true,
+      priority: 10,
+      templateId: "default",
+      rules: {
+        titleKeywords: ["Go"],
+        cities: ["北京"],
+        companyBlacklist: [],
+        industryBlacklist: [],
+        allowRemote: false,
+      },
+    }));
 
     bridge.attach(socket);
     const challenge = socket.last("challenge");
@@ -30,14 +44,9 @@ describe("Chrome extension bridge", () => {
     });
 
     const pending = bridge.getStatus();
-    expect(pending.pairingState).toBe("等待批准");
-    expect(pending.pendingPairing?.code).toMatch(/^\d{6}$/);
-    await bridge.approvePairing(pending.pendingPairing!.requestId);
-    const paired = socket.last("pairing_accepted");
-    expect(paired.pairingSecret).toMatch(/^[A-Za-z0-9_-]{40,}$/);
-
+    expect(pending.pairingState).toBe("等待授权");
     await socket.receive({
-      type: "bind_page",
+      type: "prepare_page",
       tab: {
         tabId: 42,
         url: "https://www.zhipin.com/web/geek/job",
@@ -46,27 +55,16 @@ describe("Chrome extension bridge", () => {
         accountDisplayName: "本人账号",
       },
     });
+    await vi.waitFor(() => expect(socket.last("command")).toBeDefined());
+    const paired = socket.last("pairing_accepted");
+    expect(paired.pairingSecret).toMatch(/^[A-Za-z0-9_-]{40,}$/);
     expect(bridge.getStatus()).toMatchObject({
-      pairingState: "已配对",
+      pairingState: "已授权",
       connectionState: "页面已连接",
       capabilities: ["read", "batch-send"],
       page: { tabId: 42, accountDisplayName: "本人账号" },
     });
 
-    const calibration = bridge.calibrate({
-      id: "go-beijing",
-      name: "北京 Go",
-      enabled: true,
-      priority: 10,
-      templateId: "default",
-      rules: {
-        titleKeywords: ["Go"],
-        cities: ["北京"],
-        companyBlacklist: [],
-        industryBlacklist: [],
-        allowRemote: false,
-      },
-    });
     const command = socket.last("command");
     expect(command).toMatchObject({
       command: {
@@ -86,12 +84,12 @@ describe("Chrome extension bridge", () => {
       },
     });
 
-    await expect(calibration).resolves.toEqual({
-      candidatesRecognized: 12,
-      currentUrl: "https://www.zhipin.com/job_detail/abc.html",
-      contactState: "可沟通",
+    await vi.waitFor(() => {
+      expect(bridge.getStatus()).toMatchObject({
+        readOnlyCalibrated: true,
+        preparation: { state: "ready", stage: "ready" },
+      });
     });
-    expect(bridge.getStatus().readOnlyCalibrated).toBe(true);
     await socket.receive({
       type: "page_state",
       tab: {
@@ -107,7 +105,7 @@ describe("Chrome extension bridge", () => {
     expect(challenge.nonce).toHaveLength(43);
   });
 
-  it("keeps protocol v1 extensions available for calibration but never grants send capability", async () => {
+  it("rejects extensions that do not support the one-step protocol", async () => {
     const bridge = createExtensionBridge({
       settings: memorySettings(new Map()),
       commandTimeoutMs: 1_000,
@@ -115,7 +113,9 @@ describe("Chrome extension bridge", () => {
     const socket = new FakeSocket();
 
     bridge.attach(socket);
-    expect(socket.last("challenge")).toMatchObject({ protocolVersion: 1 });
+    expect(socket.last("challenge")).toMatchObject({
+      protocolVersion: EXTENSION_PROTOCOL_VERSION,
+    });
     await socket.receive({
       type: "hello",
       protocolVersion: 1,
@@ -124,32 +124,11 @@ describe("Chrome extension bridge", () => {
       instanceId: "legacy-extension",
       capabilities: ["read"],
     });
-    const pending = bridge.getStatus();
-    await bridge.approvePairing(pending.pendingPairing!.requestId);
-    await socket.receive({
-      type: "bind_page",
-      tab: {
-        tabId: 7,
-        url: "https://www.zhipin.com/web/geek/job",
-        active: true,
-        visible: true,
-      },
+    expect(socket.closed).toEqual({ code: 4406, reason: "扩展版本不兼容" });
+    expect(bridge.getStatus().preparation).toMatchObject({
+      state: "error",
+      error: "请重新构建并加载最新扩展",
     });
-
-    expect(bridge.getStatus()).toMatchObject({
-      adapterVersion: 1,
-      capabilities: ["read"],
-      connectionState: "页面已连接",
-    });
-    await expect(
-      bridge.sendOpening({
-        operationId: "operation",
-        commandId: "command",
-        candidate: { id: "job", title: "Go", company: "甲公司" },
-        message: "您好",
-        messageHash: "a".repeat(64),
-      }),
-    ).rejects.toThrow("不支持 batch-send");
     bridge.close();
   });
 
@@ -186,7 +165,7 @@ describe("Chrome extension bridge", () => {
 
     expect(socket.last("ready")).toMatchObject({ type: "ready" });
     expect(bridge.getStatus()).toMatchObject({
-      pairingState: "已配对",
+      pairingState: "已授权",
       connectionState: "扩展已连接",
     });
     bridge.close();
@@ -203,6 +182,50 @@ describe("Chrome extension bridge", () => {
     bridge.attach(second);
 
     expect(second.closed).toEqual({ code: 4409, reason: "已有扩展连接" });
+    bridge.close();
+  });
+
+  it("does not authorize when page preparation prerequisites fail", async () => {
+    const bridge = createExtensionBridge({
+      settings: memorySettings(new Map()),
+      commandTimeoutMs: 1_000,
+    });
+    bridge.setPreparationHandler?.(async () => {
+      throw new Error("没有已启用的搜索方案，请先在 JobPilot 中启用一个方案");
+    });
+    const socket = new FakeSocket();
+    bridge.attach(socket);
+    await socket.receive({
+      type: "hello",
+      protocolVersion: EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.2.0",
+      adapterVersion: BOSS_ADAPTER_VERSION,
+      instanceId: "extension-instance-1",
+      capabilities: ["read", "batch-send"],
+    });
+    await socket.receive({
+      type: "prepare_page",
+      tab: {
+        tabId: 42,
+        url: "https://www.zhipin.com/web/geek/job",
+        active: true,
+        visible: true,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(bridge.getStatus()).toMatchObject({
+        pairingState: "等待授权",
+        connectionState: "未连接",
+        preparation: {
+          state: "error",
+          error: "没有已启用的搜索方案，请先在 JobPilot 中启用一个方案",
+        },
+      });
+    });
+    expect(
+      socket.sent.some((message) => message.type === "pairing_accepted"),
+    ).toBe(false);
     bridge.close();
   });
 
@@ -224,6 +247,20 @@ describe("Chrome extension bridge", () => {
       commandTimeoutMs: 1_000,
     });
     const socket = new FakeSocket();
+    bridge.setPreparationHandler?.(async () => ({
+      id: "plan",
+      name: "方案",
+      enabled: true,
+      priority: 1,
+      templateId: "template",
+      rules: {
+        titleKeywords: ["Go"],
+        cities: ["北京"],
+        companyBlacklist: [],
+        industryBlacklist: [],
+        allowRemote: false,
+      },
+    }));
     bridge.attach(socket);
     const challenge = socket.last("challenge");
     await socket.receive({
@@ -238,7 +275,7 @@ describe("Chrome extension bridge", () => {
         .digest("base64url"),
     });
     await socket.receive({
-      type: "bind_page",
+      type: "prepare_page",
       tab: {
         tabId: 8,
         url: "https://www.zhipin.com/web/geek/job",
@@ -246,24 +283,15 @@ describe("Chrome extension bridge", () => {
         visible: true,
       },
     });
-
-    const calibration = bridge.calibrate({
-      id: "plan",
-      name: "方案",
-      enabled: true,
-      priority: 1,
-      templateId: "template",
-      rules: {
-        titleKeywords: ["Go"],
-        cities: ["北京"],
-        companyBlacklist: [],
-        industryBlacklist: [],
-        allowRemote: false,
-      },
-    });
+    await vi.waitFor(() => expect(socket.last("command")).toBeDefined());
     await socket.disconnect();
 
-    await expect(calibration).rejects.toThrow(/扩展连接已断开/);
+    await vi.waitFor(() => {
+      expect(bridge.getStatus().preparation).toMatchObject({
+        state: "error",
+        error: expect.stringMatching(/扩展.*连接|Chrome 扩展尚未连接/),
+      });
+    });
     bridge.close();
   });
 });

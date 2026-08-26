@@ -9,6 +9,7 @@ import {
   type ExtensionToServerMessage,
   type InspectPositionCommand,
   type InspectPositionResult,
+  type PagePreparationStatus,
   type ScanPlanCommand,
   type ScanPlanResult,
   type SendOpeningCommand,
@@ -31,8 +32,13 @@ let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let connectionId: string | undefined;
 let boundTabId: number | undefined;
 let commandRunning = false;
-let pairingCode: string | undefined;
+let handshakeReady = false;
 let lastError: string | undefined;
+let preparation: PagePreparationStatus = {
+  state: "idle",
+  stage: "connecting",
+  message: "等待连接当前页面",
+};
 const commandResults = new Map<
   string,
   Extract<ExtensionToServerMessage, { type: "command_result" }>
@@ -49,11 +55,19 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
     void extensionState().then(respond);
     return true;
   }
-  if (message.type === "bind_current_page") {
-    void bindCurrentPage()
+  if (message.type === "prepare_current_page") {
+    void prepareCurrentPage()
       .then(respond)
       .catch((error: unknown) => {
-        respond({ ok: false, error: messageOf(error) });
+        const message = messageOf(error);
+        preparation = {
+          state: "error",
+          stage: preparation.stage,
+          message: "页面尚未就绪",
+          error: message,
+        };
+        lastError = message;
+        respond({ ok: false, error: message });
       });
     return true;
   }
@@ -107,6 +121,7 @@ async function connect(): Promise<void> {
       if (socket === next) socket = undefined;
       connectionId = undefined;
       boundTabId = undefined;
+      handshakeReady = false;
       if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
       heartbeatTimer = undefined;
       scheduleReconnect();
@@ -146,31 +161,36 @@ async function receiveServerMessage(
     });
     return;
   }
-  if (message.type === "pairing_required") {
+  if (message.type === "authorization_required") {
     await chrome.storage.local.remove(STORAGE_PAIRING_SECRET);
     connectionId = undefined;
     boundTabId = undefined;
-    pairingCode = message.code;
+    handshakeReady = true;
     return;
   }
   if (message.type === "pairing_accepted") {
     await chrome.storage.local.set({
       [STORAGE_PAIRING_SECRET]: message.pairingSecret,
     });
-    pairingCode = undefined;
     connectionId = message.connectionId;
+    handshakeReady = true;
     lastError = undefined;
     return;
   }
   if (message.type === "ready") {
     connectionId = message.connectionId;
-    pairingCode = undefined;
+    handshakeReady = true;
     lastError = undefined;
     return;
   }
   if (message.type === "page_bound") {
     boundTabId = message.tabId;
     lastError = undefined;
+    return;
+  }
+  if (message.type === "preparation_state") {
+    preparation = { ...message.status };
+    lastError = message.status.error;
     return;
   }
   if (message.type === "disarm") {
@@ -180,6 +200,14 @@ async function receiveServerMessage(
   }
   if (message.type === "error") {
     lastError = message.message;
+    if (preparation.state === "running") {
+      preparation = {
+        state: "error",
+        stage: preparation.stage,
+        message: "页面尚未就绪",
+        error: message.message,
+      };
+    }
     return;
   }
   await executeCommand(message.command);
@@ -241,11 +269,18 @@ async function executeCommand(command: ExtensionCommand): Promise<void> {
     });
   } catch (error) {
     const message = messageOf(error);
+    const currentTab =
+      boundTabId === undefined
+        ? undefined
+        : await chrome.tabs.get(boundTabId).catch(() => undefined);
     await completeCommand({
       type: "command_result",
       commandId: command.commandId,
       outcome: /登录|验证|风控|访问异常/.test(message) ? "takeover" : "error",
       error: message,
+      ...(currentTab?.url === undefined
+        ? {}
+        : { data: { currentUrl: currentTab.url } }),
     });
   } finally {
     commandRunning = false;
@@ -294,11 +329,19 @@ async function calibrate(
     inspection: BossPageInspection;
     contactState: CalibrationResult["contactState"];
   }>(tabId, { type: "read_contact_state" }, "detail", commandDeadline);
+  send({ type: "preparation_progress", stage: "returning" });
+  let returnWarning: string | undefined;
+  try {
+    await navigate(tabId, command.searchUrl);
+  } catch (error) {
+    returnWarning = `页面检查已通过，但返回搜索列表失败：${messageOf(error)}`;
+  }
   const tab = await chrome.tabs.get(tabId);
   return {
     candidatesRecognized: list.candidates.length,
     currentUrl: tab.url ?? detail.inspection.url,
     contactState: detail.contactState,
+    ...(returnWarning === undefined ? {} : { returnWarning }),
   };
 }
 
@@ -458,10 +501,31 @@ async function readTabWhenReady<T extends { inspection: BossPageInspection }>(
   throw new Error("当前 Boss 页面结构不受支持");
 }
 
-async function bindCurrentPage(): Promise<{ ok: true; page: BoundBossPage }> {
-  if (connectionId === undefined || socket?.readyState !== WebSocket.OPEN) {
-    throw new Error("扩展尚未与本机 JobPilot 完成配对连接");
+async function prepareCurrentPage(): Promise<{
+  ok: true;
+  page: BoundBossPage;
+}> {
+  if (preparation.state === "running") {
+    return { ok: true, page: await activeBossPage() };
   }
+  preparation = {
+    state: "running",
+    stage: "connecting",
+    message: "正在连接本机…",
+  };
+  await connect();
+  await waitForHandshake();
+  const page = await activeBossPageWithRetry();
+  preparation = {
+    state: "running",
+    stage: connectionId === undefined ? "authorizing" : "binding",
+    message: connectionId === undefined ? "正在授权扩展…" : "正在连接当前页面…",
+  };
+  send({ type: "prepare_page", tab: page });
+  return { ok: true, page };
+}
+
+async function activeBossPage(): Promise<BoundBossPage> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id === undefined || tab.url === undefined || !isBossUrl(tab.url)) {
     throw new Error("请先打开并登录 Boss 官方页面");
@@ -479,9 +543,27 @@ async function bindCurrentPage(): Promise<{ ok: true; page: BoundBossPage }> {
       ? {}
       : { accountDisplayName: inspection.accountDisplayName }),
   };
-  boundTabId = tab.id;
-  send({ type: "bind_page", tab: page });
-  return { ok: true, page };
+  return page;
+}
+
+async function activeBossPageWithRetry(): Promise<BoundBossPage> {
+  try {
+    return await activeBossPage();
+  } catch (error) {
+    if (/登录|验证|风控|官方页面|结构不受支持/.test(messageOf(error)))
+      throw error;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return activeBossPage();
+  }
+}
+
+async function waitForHandshake(): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (socket?.readyState === WebSocket.OPEN && handshakeReady) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("连接本机 JobPilot 超时");
 }
 
 async function reportPageState(tabId: number, visible = true): Promise<void> {
@@ -578,17 +660,22 @@ function takeoverFromInspection(
 async function extensionState() {
   return {
     serverConnected: socket?.readyState === WebSocket.OPEN,
-    paired: connectionId !== undefined,
-    pairingCode,
+    authorized: connectionId !== undefined,
     pageConnected: boundTabId !== undefined,
     boundTabId,
     lastError,
+    preparation: { ...preparation },
   };
 }
 
 function emergencyStop(): void {
   send({ type: "emergency_stop", reason: "求职者通过扩展紧急停止" });
   boundTabId = undefined;
+  preparation = {
+    state: "idle",
+    stage: "connecting",
+    message: "页面连接已解除",
+  };
 }
 
 function send(message: ExtensionToServerMessage): void {
@@ -689,21 +776,13 @@ function parseServerMessage(raw: string): ServerToExtensionMessage {
   }
   if (value.type === "challenge") {
     if (
-      ![1, EXTENSION_PROTOCOL_VERSION].includes(
-        Number(value.protocolVersion),
-      ) ||
+      Number(value.protocolVersion) !== EXTENSION_PROTOCOL_VERSION ||
       !isShortString(value.nonce, 200)
     ) {
       throw new Error("本机挑战消息格式无效");
     }
-  } else if (value.type === "pairing_required") {
-    if (
-      !isShortString(value.requestId, 100) ||
-      typeof value.code !== "string" ||
-      !/^\d{6}$/.test(value.code)
-    ) {
-      throw new Error("本机配对消息格式无效");
-    }
+  } else if (value.type === "authorization_required") {
+    // The explicit click in the extension is the authorization gesture.
   } else if (value.type === "pairing_accepted") {
     if (
       !isShortString(value.pairingSecret, 200) ||
@@ -721,6 +800,10 @@ function parseServerMessage(raw: string): ServerToExtensionMessage {
       !Number.isSafeInteger(value.tabId)
     ) {
       throw new Error("本机页面连接确认格式无效");
+    }
+  } else if (value.type === "preparation_state") {
+    if (!isPagePreparationStatus(value.status)) {
+      throw new Error("本机页面准备状态格式无效");
     }
   } else if (value.type === "disarm") {
     if (!isShortString(value.reason, 500)) {
@@ -778,6 +861,24 @@ function parseServerMessage(raw: string): ServerToExtensionMessage {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPagePreparationStatus(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    ["idle", "running", "ready", "error"].includes(String(value.state)) &&
+    [
+      "connecting",
+      "authorizing",
+      "binding",
+      "calibrating",
+      "returning",
+      "ready",
+    ].includes(String(value.stage)) &&
+    isShortString(value.message, 500) &&
+    (value.error === undefined || isShortString(value.error, 1_000)) &&
+    (value.warning === undefined || isShortString(value.warning, 1_000))
+  );
 }
 
 function isShortString(value: unknown, maxLength: number): value is string {

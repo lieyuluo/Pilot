@@ -12,17 +12,18 @@
         <span class="mark">JP</span>
         <div>
           <strong>JobPilot</strong>
-          <small>BOSS 页面连接器</small>
+          <small>BOSS 页面准备</small>
         </div>
       </header>
-      <section>
+      <section id="connection-status" data-tone="neutral" aria-live="polite">
         <strong id="status">正在检查…</strong>
         <p id="detail"></p>
       </section>
-      <button id="connect" disabled>连接当前 BOSS 标签页</button>
+      <button id="connect">连接并检查当前页面</button>
       <button id="stop" class="danger" disabled>紧急停止并解除连接</button>
       <p class="footnote">
-        当前版本仅用于只读校准；不会读取 Cookie，也不包含投递或发送消息能力。
+        点击将授权此扩展连接本机 JobPilot，并导航当前 BOSS
+        页面完成只读检查；不会读取 Cookie 或发送消息。
       </p>
     </main>
     <script type="module" src="popup.js"></script>

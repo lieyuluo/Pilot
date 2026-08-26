@@ -44,23 +44,30 @@ test("用户可以完成一个本地演示批次并查看职位快照", async ({
   await expect(page.getByRole("table")).toContainText("Go 后端开发工程师");
 });
 
-test("设置页通过扩展配对、页面连接完成只读校准", async ({ page }) => {
+test("设置页同步展示扩展的一键页面准备状态", async ({ page }) => {
   const extensionStatus = {
-    pairingState: "等待批准",
+    pairingState: "等待授权",
     connectionState: "扩展已连接",
-    capabilities: ["read"],
+    capabilities: ["read", "batch-send"],
     readOnlyCalibrated: false,
-    pendingPairing: { requestId: "pairing-1", code: "482731" },
+    preparation: {
+      state: "running",
+      stage: "calibrating",
+      message: "正在检查页面…",
+    },
   } as {
     pairingState: string;
     connectionState: string;
     capabilities: string[];
     readOnlyCalibrated: boolean;
-    pendingPairing?: { requestId: string; code: string };
+    preparation: {
+      state: string;
+      stage: string;
+      message: string;
+      warning?: string;
+    };
     page?: { tabId: number; url: string; active: boolean; visible: boolean };
   };
-  let approvalRequests = 0;
-  let checkRequests = 0;
   await page.route("**/api/extension/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -68,36 +75,22 @@ test("设置页通过扩展配对、页面连接完成只读校准", async ({ pa
       body: JSON.stringify(extensionStatus),
     });
   });
-  await page.route(
-    "**/api/extension/pairings/pairing-1/approve",
-    async (route) => {
-      approvalRequests += 1;
-      extensionStatus.pairingState = "已配对";
-      delete extensionStatus.pendingPairing;
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ paired: true }),
-      });
-    },
-  );
-  await page.route("**/api/calibration/boss", async (route) => {
-    checkRequests += 1;
-    extensionStatus.readOnlyCalibrated = true;
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ calibrated: true, candidatesRecognized: 12 }),
-    });
-  });
 
   await page.goto("/");
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await expect(page.getByText("482731", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "批准此扩展", exact: true }).click();
-  await expect(page.getByText(/扩展已配对。请在已登录/)).toBeVisible();
-  expect(approvalRequests).toBe(1);
+  await expect(page.getByText("正在检查页面…", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "批准此扩展" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "校准页面读取" })).toHaveCount(
+    0,
+  );
+  extensionStatus.pairingState = "已授权";
   extensionStatus.connectionState = "页面已连接";
+  extensionStatus.readOnlyCalibrated = true;
+  extensionStatus.preparation = {
+    state: "ready",
+    stage: "ready",
+    message: "页面已就绪，识别到 12 个候选职位",
+  };
   extensionStatus.page = {
     tabId: 17,
     url: "https://www.zhipin.com/web/geek/job",
@@ -109,11 +102,9 @@ test("设置页通过扩展配对、页面连接完成只读校准", async ({ pa
       timeout: 5_000,
     },
   );
-  await page.getByRole("button", { name: "校准页面读取", exact: true }).click();
   await expect(
-    page.getByText("只读校准通过，识别到 12 个候选职位。"),
+    page.getByText("页面已就绪，识别到 12 个候选职位"),
   ).toBeVisible();
-  expect(checkRequests).toBe(1);
-  await expect(page.getByLabel(/只读校准已经通过/)).toBeChecked();
+  await expect(page.getByLabel(/当前页面已经就绪/)).toBeChecked();
   await expect(page.getByLabel(/扩展支持原子批次发送/)).toBeDisabled();
 });

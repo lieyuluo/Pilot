@@ -1,7 +1,7 @@
 import type { PlatformContactState } from "../core/batch-runner.ts";
 import type { CandidatePosition } from "../core/rules.ts";
 
-export const EXTENSION_PROTOCOL_VERSION = 2;
+export const EXTENSION_PROTOCOL_VERSION = 3;
 export const BOSS_ADAPTER_VERSION = 3;
 export const EXTENSION_MESSAGE_LIMIT_BYTES = 64 * 1024;
 export const JOBPILOT_EXTENSION_ID = "gfaoagnbbaihijgmenfnhfphjiebngio";
@@ -59,6 +59,23 @@ export interface CalibrationResult {
   candidatesRecognized: number;
   currentUrl: string;
   contactState: PlatformContactState;
+  returnWarning?: string;
+}
+
+export type PagePreparationStage =
+  | "connecting"
+  | "authorizing"
+  | "binding"
+  | "calibrating"
+  | "returning"
+  | "ready";
+
+export interface PagePreparationStatus {
+  state: "idle" | "running" | "ready" | "error";
+  stage: PagePreparationStage;
+  message: string;
+  error?: string;
+  warning?: string;
 }
 
 export interface ScanPlanResult {
@@ -100,8 +117,9 @@ export type ExtensionToServerMessage =
       challengeProof?: string;
     }
   | { type: "heartbeat" }
-  | { type: "bind_page"; tab: BoundBossPage }
+  | { type: "prepare_page"; tab: BoundBossPage }
   | { type: "page_state"; tab: BoundBossPage }
+  | { type: "preparation_progress"; stage: "returning" }
   | {
       type: "command_result";
       commandId: string;
@@ -117,11 +135,7 @@ export type ServerToExtensionMessage =
       protocolVersion: number;
       nonce: string;
     }
-  | {
-      type: "pairing_required";
-      requestId: string;
-      code: string;
-    }
+  | { type: "authorization_required" }
   | {
       type: "pairing_accepted";
       pairingSecret: string;
@@ -129,11 +143,12 @@ export type ServerToExtensionMessage =
     }
   | { type: "ready"; connectionId: string }
   | { type: "page_bound"; connectionId: string; tabId: number }
+  | { type: "preparation_state"; status: PagePreparationStatus }
   | { type: "command"; command: ExtensionCommand }
   | { type: "disarm"; reason: string }
   | { type: "error"; code: string; message: string };
 
-export type ExtensionPairingState = "未配对" | "等待批准" | "已配对";
+export type ExtensionPairingState = "未授权" | "等待授权" | "已授权";
 export type ExtensionConnectionState = "未连接" | "扩展已连接" | "页面已连接";
 
 export interface ExtensionStatus {
@@ -143,9 +158,6 @@ export interface ExtensionStatus {
   adapterVersion?: number;
   capabilities: ExtensionCapability[];
   readOnlyCalibrated: boolean;
-  pendingPairing?: {
-    requestId: string;
-    code: string;
-  };
+  preparation?: PagePreparationStatus;
   page?: BoundBossPage;
 }

@@ -54,6 +54,28 @@ const runner = createBatchRunner({
   },
   onEvent: eventBus.publish,
 });
+extensionBridge.setPreparationHandler?.(async () => {
+  if (
+    !["空闲", "已完成", "已完成有异常", "人工接管", "已失败"].includes(
+      runner.getState(),
+    )
+  ) {
+    throw new Error("投递批次运行中，请先在 JobPilot 中停止批次");
+  }
+  const plan = store
+    .listSearchPlans()
+    .filter((candidate) => candidate.enabled)
+    .sort((left, right) => right.priority - left.priority)[0];
+  if (plan === undefined) {
+    throw new Error("没有已启用的搜索方案，请先在 JobPilot 中启用一个方案");
+  }
+  store.setSetting("app", {
+    ...readAppSettings(store),
+    adapterMode: "boss",
+    realSendEnabled: false,
+  });
+  return plan;
+});
 const server = buildServer({
   store,
   batchRunner: runner,
