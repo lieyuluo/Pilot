@@ -4,8 +4,6 @@ import { join } from "node:path";
 export interface AppPaths {
   root: string;
   database: string;
-  browserProfile: string;
-  evidence: string;
   backups: string;
 }
 
@@ -21,8 +19,6 @@ export function resolveAppPaths(
   return {
     root,
     database: join(root, "jobpilot.db"),
-    browserProfile: join(root, "browser-profile"),
-    evidence: join(root, "evidence"),
     backups: join(root, "backups"),
   };
 }

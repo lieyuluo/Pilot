@@ -1,29 +1,33 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import helmet from "@fastify/helmet";
 import swagger from "@fastify/swagger";
+import fastifyWebsocket from "@fastify/websocket";
 import { Type } from "@sinclair/typebox";
 import Fastify, { type FastifyInstance } from "fastify";
 
-import type { BatchRunner } from "../core/batch-runner.ts";
+import { positionIdentity, type BatchRunner } from "../core/batch-runner.ts";
 import type { BatchEventBus } from "../core/events.ts";
 import type { OpeningTemplate, SearchPlan } from "../core/config.ts";
+import type { ExtensionBridge } from "../extension/bridge.ts";
+import {
+  EXTENSION_MESSAGE_LIMIT_BYTES,
+  JOBPILOT_EXTENSION_ORIGIN,
+  type ExtensionStatus,
+} from "../extension/protocol.ts";
 import type { JobPilotStore } from "../storage/store.ts";
 
 export interface ServerDependencies {
   store: JobPilotStore;
   batchRunner: BatchRunner;
   eventBus?: BatchEventBus;
-  calibrateBoss?: (
-    plan: SearchPlan,
-  ) => Promise<{ candidatesRecognized: number }>;
+  extensionBridge?: ExtensionBridge;
 }
 
 export interface AppSettings {
   accountNote: string;
   adapterMode: "fake" | "boss";
   realSendEnabled: boolean;
-  readOnlySmokePassed: boolean;
   cooldownMs: number;
 }
 
@@ -34,11 +38,10 @@ interface ConfigurationBundle {
   templates: OpeningTemplate[];
 }
 
-const DEFAULT_SETTINGS: AppSettings = {
+export const DEFAULT_SETTINGS: AppSettings = {
   accountNote: "本地演示模式",
   adapterMode: "fake",
   realSendEnabled: false,
-  readOnlySmokePassed: false,
   cooldownMs: 5_000,
 };
 
@@ -47,6 +50,13 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
   const csrfToken = randomBytes(24).toString("base64url");
   let lastSummary: Awaited<ReturnType<BatchRunner["run"]>> | undefined;
   let batchPromise: Promise<void> | undefined;
+  let sendSessionArmed = false;
+  const sendSessionMetrics = {
+    creditsUsed: 0,
+    contactsSucceeded: 0,
+    unknownCount: 0,
+    mismatchCount: 0,
+  };
 
   void server.register(helmet, {
     contentSecurityPolicy: false,
@@ -58,15 +68,20 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
       servers: [{ url: "http://127.0.0.1:4317" }],
     },
   });
-
   server.addHook("onRequest", async (request, reply) => {
     const hostname = request.hostname.toLocaleLowerCase();
     if (hostname !== "127.0.0.1" && hostname !== "localhost") {
       return reply.code(403).send({ error: "仅允许本机访问" });
     }
     const origin = request.headers.origin;
-    if (origin !== undefined && !isAllowedOrigin(origin)) {
-      return reply.code(403).send({ error: "请求来源不受信任" });
+    if (origin !== undefined) {
+      const allowed =
+        request.url === "/extension"
+          ? origin === JOBPILOT_EXTENSION_ORIGIN
+          : isAllowedWebOrigin(origin);
+      if (!allowed) {
+        return reply.code(403).send({ error: "请求来源不受信任" });
+      }
     }
     if (
       request.url.startsWith("/api/") &&
@@ -75,6 +90,23 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
     ) {
       return reply.code(403).send({ error: "防跨站请求令牌无效" });
     }
+  });
+
+  void server
+    .register(fastifyWebsocket, {
+      options: { maxPayload: EXTENSION_MESSAGE_LIMIT_BYTES },
+    })
+    .after(() => {
+      server.get("/extension", { websocket: true }, (socket) => {
+        if (dependencies.extensionBridge === undefined) {
+          socket.close(1013, "扩展桥尚未配置");
+          return;
+        }
+        dependencies.extensionBridge.attach(socket);
+      });
+    });
+  server.addHook("onClose", async () => {
+    dependencies.extensionBridge?.close();
   });
 
   server.get("/api/health", async () => ({
@@ -86,6 +118,12 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
 
   server.get("/api/status", async () => ({
     batchState: dependencies.batchRunner.getState(),
+    sendSession: {
+      armed: sendSessionArmed,
+      ...sendSessionMetrics,
+      ...dependencies.store.getSendReadiness(),
+      pending: pendingOperations(),
+    },
     ...(lastSummary === undefined ? {} : { lastSummary }),
   }));
 
@@ -98,12 +136,18 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
     templates: dependencies.store.listTemplates(),
   }));
 
+  server.get("/api/export/operations", async () => ({
+    formatVersion: 1,
+    exportedAt: new Date().toISOString(),
+    events: dependencies.store.listContactOperationEvents(10_000),
+  }));
+
   server.post<{ Body: ConfigurationBundle }>(
     "/api/import/configuration",
     { schema: { body: configurationBundleSchema } },
     async (request, reply) => {
       if (
-        !["空闲", "已完成", "已失败"].includes(
+        !["空闲", "已完成", "已完成有异常", "人工接管", "已失败"].includes(
           dependencies.batchRunner.getState(),
         )
       ) {
@@ -187,39 +231,214 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
     }),
   );
 
-  server.get("/api/settings", async () =>
-    dependencies.store.getSetting<AppSettings>("app", DEFAULT_SETTINGS),
+  server.get("/api/settings", async () => readAppSettings(dependencies.store));
+
+  server.get("/api/extension/status", async () => extensionStatus());
+
+  server.get("/api/send/readiness", async () => ({
+    armed: sendSessionArmed,
+    ...sendSessionMetrics,
+    ...dependencies.store.getSendReadiness(),
+    pending: pendingOperations(),
+  }));
+
+  server.post<{ Body: { confirmed: true } }>(
+    "/api/send/session",
+    {
+      schema: {
+        body: Type.Object({ confirmed: Type.Literal(true) }),
+      },
+    },
+    async (_request, reply) => {
+      if (batchPromise !== undefined) {
+        return reply
+          .code(409)
+          .send({ error: "投递批次运行期间不能建立发送会话" });
+      }
+      const settings = readAppSettings(dependencies.store);
+      if (settings.adapterMode !== "boss") {
+        return reply.code(409).send({ error: "请先切换到 Boss 真实页面模式" });
+      }
+      const status = extensionStatus();
+      if (
+        status.connectionState !== "页面已连接" ||
+        !status.readOnlyCalibrated ||
+        !status.capabilities.includes("batch-send")
+      ) {
+        return reply
+          .code(409)
+          .send({ error: "请先完成当前 Boss 页面的读取校准" });
+      }
+      sendSessionArmed = true;
+      return {
+        armed: true,
+        accountDisplayName: status.page?.accountDisplayName ?? "账号无法识别",
+        ...dependencies.store.getSendReadiness(),
+      };
+    },
   );
+
+  server.delete("/api/send/session", async (_request, reply) => {
+    sendSessionArmed = false;
+    if (batchPromise !== undefined)
+      dependencies.batchRunner.requestStop("普通");
+    return reply
+      .code(202)
+      .send({ armed: false, stopping: batchPromise !== undefined });
+  });
+
+  server.post("/api/send/qualification/reset", async (_request, reply) => {
+    if (batchPromise !== undefined) {
+      return reply.code(409).send({ error: "投递批次运行期间不能重置资格" });
+    }
+    dependencies.store.resetSendQualification();
+    return { reset: true, ...dependencies.store.getSendReadiness() };
+  });
+
+  server.post<{
+    Params: { operationId: string };
+  }>(
+    "/api/contact-operations/:operationId/inspect",
+    {
+      schema: {
+        params: Type.Object({
+          operationId: Type.String({ minLength: 1, maxLength: 100 }),
+        }),
+      },
+    },
+    async (request, reply) => {
+      if (batchPromise !== undefined) {
+        return reply.code(409).send({ error: "请在投递批次结束后人工核实" });
+      }
+      const operation = dependencies.store
+        .listPendingContactOperations()
+        .find((item) => item.operationId === request.params.operationId);
+      if (operation === undefined) {
+        return reply.code(404).send({ error: "待核实沟通操作不存在" });
+      }
+      try {
+        const inspected = await inspectPendingOperation(operation);
+        return {
+          verified: true,
+          contactState: inspected.contactState,
+          candidate: inspected.candidate,
+        };
+      } catch (error) {
+        return reply.code(409).send({
+          error: error instanceof Error ? error.message : "无法核实对应职位",
+        });
+      }
+    },
+  );
+
+  server.post<{
+    Params: { operationId: string };
+    Body: { resolution: "人工确认已发送" | "人工确认未发送" };
+  }>(
+    "/api/contact-operations/:operationId/resolve",
+    {
+      schema: {
+        params: Type.Object({
+          operationId: Type.String({ minLength: 1, maxLength: 100 }),
+        }),
+        body: Type.Object({
+          resolution: Type.Union([
+            Type.Literal("人工确认已发送"),
+            Type.Literal("人工确认未发送"),
+          ]),
+        }),
+      },
+    },
+    async (request, reply) => {
+      if (batchPromise !== undefined) {
+        return reply.code(409).send({ error: "请在投递批次结束后人工核实" });
+      }
+      const operation = dependencies.store
+        .listPendingContactOperations()
+        .find((item) => item.operationId === request.params.operationId);
+      if (operation === undefined) {
+        return reply.code(404).send({ error: "待核实沟通操作不存在" });
+      }
+      try {
+        await inspectPendingOperation(operation);
+        dependencies.store.resolveContactOperation(
+          operation.operationId,
+          request.body.resolution,
+          new Date().toISOString(),
+        );
+        return { resolved: true, ...dependencies.store.getSendReadiness() };
+      } catch (error) {
+        return reply.code(409).send({
+          error: error instanceof Error ? error.message : "无法核实对应职位",
+        });
+      }
+    },
+  );
+
+  server.post<{ Params: { requestId: string } }>(
+    "/api/extension/pairings/:requestId/approve",
+    {
+      schema: {
+        params: Type.Object({
+          requestId: Type.String({ minLength: 1, maxLength: 100 }),
+        }),
+      },
+    },
+    async (request, reply) => {
+      if (dependencies.extensionBridge === undefined) {
+        return reply.code(501).send({ error: "当前运行环境未配置扩展桥" });
+      }
+      try {
+        await dependencies.extensionBridge.approvePairing(
+          request.params.requestId,
+        );
+        return { paired: true };
+      } catch (error) {
+        return reply.code(409).send({
+          error: error instanceof Error ? error.message : "无法批准扩展配对",
+        });
+      }
+    },
+  );
+
+  server.post("/api/extension/pairing/reset", async (_request, reply) => {
+    if (dependencies.extensionBridge === undefined) {
+      return reply.code(501).send({ error: "当前运行环境未配置扩展桥" });
+    }
+    if (
+      !["空闲", "已完成", "已完成有异常", "人工接管", "已失败"].includes(
+        dependencies.batchRunner.getState(),
+      )
+    ) {
+      return reply.code(409).send({ error: "投递批次运行期间不能重置配对" });
+    }
+    dependencies.extensionBridge.resetPairing();
+    return { reset: true };
+  });
+
+  server.post("/api/extension/disconnect", async (_request, reply) => {
+    if (dependencies.extensionBridge === undefined) {
+      return reply.code(501).send({ error: "当前运行环境未配置扩展桥" });
+    }
+    dependencies.extensionBridge.emergencyStop("求职者已解除页面连接");
+    return { disconnected: true };
+  });
 
   server.put<{ Body: AppSettings }>(
     "/api/settings",
     { schema: { body: settingsSchema } },
     async (request, reply) => {
       if (
-        !["空闲", "已完成", "已失败"].includes(
+        !["空闲", "已完成", "已完成有异常", "人工接管", "已失败"].includes(
           dependencies.batchRunner.getState(),
         )
       ) {
         return reply.code(409).send({ error: "投递批次运行期间不能修改设置" });
       }
-      const current = dependencies.store.getSetting<AppSettings>(
-        "app",
-        DEFAULT_SETTINGS,
-      );
-      if (request.body.readOnlySmokePassed && !current.readOnlySmokePassed) {
-        return reply
-          .code(409)
-          .send({ error: "只读校准状态只能由校准流程写入" });
-      }
-      if (request.body.realSendEnabled && !request.body.readOnlySmokePassed) {
-        return reply
-          .code(409)
-          .send({ error: "只读校准未通过，不能启用真实发送" });
-      }
-      if (request.body.adapterMode !== "boss" && request.body.realSendEnabled) {
-        return reply
-          .code(409)
-          .send({ error: "只有 Boss 真实页面模式可以启用真实发送" });
+      if (request.body.realSendEnabled) {
+        return reply.code(409).send({
+          error: "第一阶段仅开放只读校准，真实发送固定关闭",
+        });
       }
       dependencies.store.setSetting("app", request.body);
       return reply.code(204).send();
@@ -227,11 +446,11 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
   );
 
   server.post("/api/calibration/boss", async (_request, reply) => {
-    if (dependencies.calibrateBoss === undefined) {
-      return reply.code(501).send({ error: "当前运行环境未配置 Boss 校准器" });
+    if (dependencies.extensionBridge === undefined) {
+      return reply.code(501).send({ error: "当前运行环境未配置 Chrome 扩展" });
     }
     if (
-      !["空闲", "已完成", "已失败"].includes(
+      !["空闲", "已完成", "已完成有异常", "人工接管", "已失败"].includes(
         dependencies.batchRunner.getState(),
       )
     ) {
@@ -244,14 +463,10 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
       return reply.code(422).send({ error: "请先启用至少一个搜索方案" });
     }
     try {
-      const result = await dependencies.calibrateBoss(plan);
-      const settings = dependencies.store.getSetting<AppSettings>(
-        "app",
-        DEFAULT_SETTINGS,
-      );
+      const result = await dependencies.extensionBridge.calibrate(plan);
+      const settings = readAppSettings(dependencies.store);
       dependencies.store.setSetting("app", {
         ...settings,
-        readOnlySmokePassed: true,
         realSendEnabled: false,
       });
       return { calibrated: true, ...result };
@@ -279,12 +494,22 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
       if (batchPromise !== undefined) {
         return reply.code(409).send({ error: "已有投递批次正在运行" });
       }
-      const settings = dependencies.store.getSetting<AppSettings>(
-        "app",
-        DEFAULT_SETTINGS,
-      );
-      if (settings.adapterMode === "boss" && !settings.realSendEnabled) {
-        return reply.code(409).send({ error: "真实发送尚未解锁" });
+      const settings = readAppSettings(dependencies.store);
+      const isBoss = settings.adapterMode === "boss";
+      if (isBoss && !sendSessionArmed) {
+        return reply.code(409).send({ error: "请先建立本进程的发送会话授权" });
+      }
+      if (isBoss) {
+        const status = extensionStatus();
+        if (
+          status.connectionState !== "页面已连接" ||
+          !status.readOnlyCalibrated ||
+          !status.capabilities.includes("batch-send")
+        ) {
+          return reply
+            .code(409)
+            .send({ error: "当前 Boss 页面尚未完成读取校准" });
+        }
       }
       const selectedIds = new Set(request.body.planIds);
       const plans = dependencies.store
@@ -294,10 +519,43 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
         return reply.code(422).send({ error: "没有可运行的搜索方案" });
       }
       const templates = dependencies.store.listTemplates();
+      const batchId = randomUUID();
+      const readiness = dependencies.store.getSendReadiness();
+      const mode = isBoss
+        ? readiness.qualified
+          ? "full"
+          : "verification"
+        : "demo";
+      const maxContacts = mode === "verification" ? 1 : 20;
       batchPromise = dependencies.batchRunner
-        .run({ plans, templates, maxContacts: 20, maxCandidates: 200 })
+        .run({
+          batchId,
+          source: isBoss ? "boss" : "demo",
+          mode,
+          plans,
+          templates,
+          maxContacts,
+          maxCandidates: 200,
+        })
         .then((summary) => {
           lastSummary = summary;
+          if (isBoss) {
+            sendSessionMetrics.creditsUsed += summary.creditsUsed ?? 0;
+            sendSessionMetrics.contactsSucceeded += summary.contactsSucceeded;
+            sendSessionMetrics.unknownCount += summary.unknownCount ?? 0;
+            sendSessionMetrics.mismatchCount += summary.mismatchCount ?? 0;
+          }
+          if (
+            mode === "verification" &&
+            summary.contactsSucceeded === 1 &&
+            (summary.unknownCount ?? 0) === 0 &&
+            (summary.mismatchCount ?? 0) === 0
+          ) {
+            dependencies.store.recordValidationSuccess(
+              batchId,
+              new Date().toISOString(),
+            );
+          }
         })
         .catch((error: unknown) => {
           lastSummary = {
@@ -310,7 +568,9 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
         .finally(() => {
           batchPromise = undefined;
         });
-      return reply.code(202).send({ started: true });
+      return reply
+        .code(202)
+        .send({ started: true, batchId, mode, maxContacts });
     },
   );
 
@@ -357,6 +617,71 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
   });
 
   return server;
+
+  function extensionStatus(): ExtensionStatus {
+    return (
+      dependencies.extensionBridge?.getStatus() ?? {
+        pairingState: "未配对",
+        connectionState: "未连接",
+        capabilities: [],
+        readOnlyCalibrated: false,
+      }
+    );
+  }
+
+  function pendingOperations() {
+    const snapshots = new Map(
+      dependencies.store
+        .listSnapshots(500)
+        .map((snapshot) => [snapshot.identity, snapshot]),
+    );
+    return dependencies.store
+      .listPendingContactOperations()
+      .map((operation) => {
+        const snapshot = snapshots.get(operation.identity);
+        return {
+          operationId: operation.operationId,
+          identity: operation.identity,
+          title: snapshot?.title ?? operation.identity,
+          company: snapshot?.company ?? "未知公司",
+          messageHash: operation.messageHash,
+          messageLength: operation.messageLength,
+          updatedAt: operation.updatedAt,
+        };
+      });
+  }
+
+  async function inspectPendingOperation(
+    operation: ReturnType<
+      JobPilotStore["listPendingContactOperations"]
+    >[number],
+  ) {
+    const snapshot = dependencies.store
+      .listSnapshots(500)
+      .find((item) => item.identity === operation.identity);
+    if (
+      dependencies.extensionBridge === undefined ||
+      snapshot === undefined ||
+      operation.url === undefined
+    ) {
+      throw new Error("无法打开并核对对应职位页面");
+    }
+    const inspected = await dependencies.extensionBridge.inspect({
+      ...(operation.platformJobId === undefined
+        ? {}
+        : { id: operation.platformJobId }),
+      url: operation.url,
+      title: snapshot.title,
+      company: snapshot.company,
+    });
+    if (
+      positionIdentity(inspected.candidate, operation.source) !==
+      operation.identity
+    ) {
+      throw new Error("当前职位与待核实操作不一致");
+    }
+    return inspected;
+  }
 }
 
 const educationSchema = Type.Union([
@@ -448,13 +773,12 @@ const settingsSchema = Type.Object(
     accountNote: Type.String({ minLength: 1, maxLength: 100 }),
     adapterMode: Type.Union([Type.Literal("fake"), Type.Literal("boss")]),
     realSendEnabled: Type.Boolean(),
-    readOnlySmokePassed: Type.Boolean(),
     cooldownMs: Type.Integer({ minimum: 0, maximum: 60_000 }),
   },
   { additionalProperties: false },
 );
 
-function isAllowedOrigin(origin: string): boolean {
+function isAllowedWebOrigin(origin: string): boolean {
   try {
     const url = new URL(origin);
     return (
@@ -465,4 +789,23 @@ function isAllowedOrigin(origin: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function readAppSettings(store: JobPilotStore): AppSettings {
+  const stored = store.getSetting<Partial<AppSettings>>("app", {});
+  return {
+    accountNote:
+      typeof stored.accountNote === "string" && stored.accountNote.trim() !== ""
+        ? stored.accountNote
+        : DEFAULT_SETTINGS.accountNote,
+    adapterMode:
+      stored.adapterMode === "boss" || stored.adapterMode === "fake"
+        ? stored.adapterMode
+        : DEFAULT_SETTINGS.adapterMode,
+    realSendEnabled: false,
+    cooldownMs:
+      typeof stored.cooldownMs === "number"
+        ? stored.cooldownMs
+        : DEFAULT_SETTINGS.cooldownMs,
+  };
 }

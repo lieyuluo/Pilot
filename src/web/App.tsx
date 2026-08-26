@@ -20,9 +20,11 @@ import {
   type AppSettings,
   type AppStatus,
   type BatchState,
+  type ExtensionStatus,
   type OpeningTemplate,
   type PositionSnapshot,
   type SearchPlan,
+  type SendSessionStatus,
 } from "./api.ts";
 
 type View = "overview" | "plans" | "templates" | "snapshots" | "settings";
@@ -43,6 +45,7 @@ export function App() {
   const [templates, setTemplates] = useState<OpeningTemplate[]>([]);
   const [snapshots, setSnapshots] = useState<PositionSnapshot[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [extensionStatus, setExtensionStatus] = useState<ExtensionStatus>();
   const [status, setStatus] = useState<AppStatus>(defaultStatus);
   const [events, setEvents] = useState<
     Array<{ state: BatchState; message: string; at: string }>
@@ -60,18 +63,21 @@ export function App() {
         nextSnapshots,
         nextSettings,
         nextStatus,
+        nextExtensionStatus,
       ] = await Promise.all([
         api<SearchPlan[]>("/api/plans"),
         api<OpeningTemplate[]>("/api/templates"),
         api<PositionSnapshot[]>("/api/snapshots?limit=100"),
         api<AppSettings>("/api/settings"),
         api<AppStatus>("/api/status"),
+        api<ExtensionStatus>("/api/extension/status"),
       ]);
       setPlans(nextPlans);
       setTemplates(nextTemplates);
       setSnapshots(nextSnapshots);
       setSettings(nextSettings);
       setStatus(nextStatus);
+      setExtensionStatus(nextExtensionStatus);
       setSelectedPlans((current) =>
         current.length > 0
           ? current
@@ -93,7 +99,9 @@ export function App() {
       };
       setStatus((current) => ({ ...current, batchState: payload.state }));
       setEvents((current) => [payload, ...current].slice(0, 12));
-      if (["已完成", "人工接管", "已失败"].includes(payload.state)) {
+      if (
+        ["已完成", "已完成有异常", "人工接管", "已失败"].includes(payload.state)
+      ) {
         void load();
       }
     };
@@ -101,13 +109,28 @@ export function App() {
     return () => stream.close();
   }, [load]);
 
-  const active = !["空闲", "已完成", "已失败"].includes(status.batchState);
+  const active = ![
+    "空闲",
+    "已完成",
+    "已完成有异常",
+    "人工接管",
+    "已失败",
+  ].includes(status.batchState);
   const enabledPlans = plans.filter((plan) => selectedPlans.includes(plan.id));
 
   const runBatch = async () => {
     setBusy(true);
     setError(undefined);
     try {
+      if (
+        settings?.adapterMode === "boss" &&
+        status.sendSession?.armed !== true
+      ) {
+        await api("/api/send/session", {
+          method: "POST",
+          body: JSON.stringify({ confirmed: true }),
+        });
+      }
       await api("/api/batches", {
         method: "POST",
         body: JSON.stringify({
@@ -121,6 +144,15 @@ export function App() {
       setError(messageOf(caught));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const endSendSession = async () => {
+    try {
+      await api("/api/send/session", { method: "DELETE" });
+      await load();
+    } catch (caught) {
+      setError(messageOf(caught));
     }
   };
 
@@ -188,6 +220,14 @@ export function App() {
             </div>
           </div>
           <div className="operation-actions">
+            {status.sendSession?.armed && (
+              <button
+                className="button quiet"
+                onClick={() => void endSendSession()}
+              >
+                结束发送会话
+              </button>
+            )}
             <button
               className="button quiet"
               disabled={!active}
@@ -223,9 +263,11 @@ export function App() {
               setSelectedPlans={setSelectedPlans}
               status={status}
               settings={settings}
+              extensionStatus={extensionStatus}
               events={events}
               active={active}
               openConfirm={() => confirmDialog.current?.showModal()}
+              reload={load}
             />
           )}
           {view === "plans" && (
@@ -238,7 +280,12 @@ export function App() {
             <Snapshots snapshots={snapshots} reload={load} />
           )}
           {view === "settings" && settings && (
-            <SettingsView settings={settings} reload={load} />
+            <SettingsView
+              settings={settings}
+              extensionStatus={extensionStatus}
+              sendSession={status.sendSession}
+              reload={load}
+            />
           )}
         </div>
       </main>
@@ -255,7 +302,11 @@ export function App() {
               ×
             </button>
           </div>
-          <p>确认后将直接处理所有达标职位，不再逐个预览。</p>
+          <p>
+            {settings?.adapterMode === "boss" && !status.sendSession?.armed
+              ? "本次确认将建立仅对当前 JobPilot 进程有效的发送会话，并启动首个批次。"
+              : "将使用当前发送会话手动启动一个新批次，不再逐个确认职位。"}
+          </p>
           <dl className="batch-summary">
             <div>
               <dt>搜索方案</dt>
@@ -264,8 +315,10 @@ export function App() {
               </dd>
             </div>
             <div>
-              <dt>账号备注</dt>
-              <dd>{settings?.accountNote ?? "未设置"}</dd>
+              <dt>页面账号名称</dt>
+              <dd>
+                {extensionStatus?.page?.accountDisplayName ?? "账号无法识别"}
+              </dd>
             </div>
             <div>
               <dt>平台模式</dt>
@@ -277,12 +330,38 @@ export function App() {
             </div>
             <div>
               <dt>批次边界</dt>
-              <dd>成功沟通 20 个 / 检查 200 个</dd>
+              <dd>
+                沟通额度{" "}
+                {settings?.adapterMode === "boss" &&
+                !status.sendSession?.qualified
+                  ? 1
+                  : 20}{" "}
+                个 / 检查 200 个
+              </dd>
+            </div>
+            <div>
+              <dt>开场模板</dt>
+              <dd>
+                {enabledPlans
+                  .map(
+                    (plan) =>
+                      templates.find((item) => item.id === plan.templateId)
+                        ?.name,
+                  )
+                  .filter(Boolean)
+                  .join("、") || "未绑定"}
+              </dd>
+            </div>
+            <div>
+              <dt>待核实职位</dt>
+              <dd>{status.sendSession?.pendingCount ?? 0} 个</dd>
             </div>
           </dl>
           <div className="warning-copy">
             <AlertTriangle size={18} />
-            <span>已发送的消息无法撤回；结果不明时系统会立即暂停。</span>
+            <span>
+              已发送的消息无法撤回；结果未知会占用额度、阻止该职位重发，并继续处理其他职位。
+            </span>
           </div>
           <div className="dialog-actions">
             <button
@@ -297,7 +376,11 @@ export function App() {
               onClick={() => void runBatch()}
             >
               <Play size={17} />
-              {busy ? "正在启动…" : "确认并启动"}
+              {busy
+                ? "正在启动…"
+                : settings?.adapterMode === "boss" && !status.sendSession?.armed
+                  ? "授权并启动"
+                  : "开始批次"}
             </button>
           </div>
         </form>
@@ -312,11 +395,45 @@ function Overview(props: {
   setSelectedPlans: (ids: string[]) => void;
   status: AppStatus;
   settings: AppSettings | null;
+  extensionStatus: ExtensionStatus | undefined;
   events: Array<{ state: BatchState; message: string; at: string }>;
   active: boolean;
   openConfirm: () => void;
+  reload: () => Promise<void>;
 }) {
   const eligiblePlans = props.plans.filter((plan) => plan.enabled);
+  const sendSession = props.status.sendSession;
+  const [inspectedOperations, setInspectedOperations] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const inspectPending = async (operationId: string) => {
+    try {
+      const result = await api<{ contactState: string }>(
+        `/api/contact-operations/${operationId}/inspect`,
+        { method: "POST" },
+      );
+      setInspectedOperations((current) => new Set(current).add(operationId));
+      window.alert(
+        `已在连接的 Boss 标签页打开并核对职位，当前平台状态：${result.contactState}。请查看会话后再选择结论。`,
+      );
+    } catch (caught) {
+      window.alert(messageOf(caught));
+    }
+  };
+  const resolvePending = async (
+    operationId: string,
+    resolution: "人工确认已发送" | "人工确认未发送",
+  ) => {
+    try {
+      await api(`/api/contact-operations/${operationId}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ resolution }),
+      });
+      await props.reload();
+    } catch (caught) {
+      window.alert(messageOf(caught));
+    }
+  };
   const togglePlan = (id: string) => {
     props.setSelectedPlans(
       props.selectedPlans.includes(id)
@@ -333,12 +450,25 @@ function Overview(props: {
       <section className="dispatch-panel">
         <div className="dispatch-copy">
           <span className="section-label">下一批</span>
-          <h2>最多成功沟通 20 个职位</h2>
+          <h2>
+            本批最多使用{" "}
+            {props.settings?.adapterMode === "boss" && !sendSession?.qualified
+              ? 1
+              : 20}{" "}
+            个沟通额度
+          </h2>
           <p>按方案优先级依次检查，达到 200 个候选职位或触发停机条件时结束。</p>
         </div>
         <button
           className="button primary start-button"
-          disabled={props.active || props.selectedPlans.length === 0}
+          disabled={
+            props.active ||
+            props.selectedPlans.length === 0 ||
+            (props.settings?.adapterMode === "boss" &&
+              (props.extensionStatus?.connectionState !== "页面已连接" ||
+                !props.extensionStatus.readOnlyCalibrated ||
+                !props.extensionStatus.capabilities.includes("batch-send")))
+          }
           onClick={props.openConfirm}
         >
           <Play size={18} />
@@ -402,9 +532,34 @@ function Overview(props: {
               }
               ready={
                 props.settings?.adapterMode === "fake" ||
-                Boolean(props.settings?.realSendEnabled)
+                (props.extensionStatus?.connectionState === "页面已连接" &&
+                  props.extensionStatus.readOnlyCalibrated &&
+                  props.extensionStatus.capabilities.includes("batch-send"))
               }
             />
+            {props.settings?.adapterMode === "boss" && (
+              <>
+                <ReadinessItem
+                  label="发送会话"
+                  value={sendSession?.armed ? "当前进程已授权" : "启动时确认"}
+                  ready={Boolean(sendSession?.armed)}
+                />
+                <ReadinessItem
+                  label="批次资格"
+                  value={
+                    sendSession?.qualified
+                      ? "完整批次"
+                      : `${sendSession?.validationSuccesses ?? 0}/5 次验证成功`
+                  }
+                  ready={Boolean(sendSession?.qualified)}
+                />
+                <ReadinessItem
+                  label="本进程累计"
+                  value={`${sendSession?.creditsUsed ?? 0} 额度 · ${sendSession?.unknownCount ?? 0} 未知 · ${sendSession?.mismatchCount ?? 0} 内容不符`}
+                  ready={(sendSession?.unknownCount ?? 0) === 0}
+                />
+              </>
+            )}
           </ul>
         </section>
         <section className="plain-section activity-section">
@@ -439,6 +594,62 @@ function Overview(props: {
           )}
         </section>
       </div>
+      {(sendSession?.pending?.length ?? 0) > 0 && (
+        <section className="plain-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-label">人工核实</span>
+              <h2>待核实职位</h2>
+            </div>
+          </div>
+          <ol className="event-list">
+            {sendSession!.pending!.map((item) => (
+              <li key={item.operationId}>
+                <div>
+                  <strong>
+                    {item.company} · {item.title}
+                  </strong>
+                  <span>
+                    消息摘要 {item.messageHash.slice(0, 12)} ·{" "}
+                    {item.messageLength} 字
+                  </span>
+                </div>
+                <div className="heading-actions">
+                  <button
+                    className="button quiet"
+                    disabled={props.active}
+                    onClick={() => void inspectPending(item.operationId)}
+                  >
+                    打开并核对
+                  </button>
+                  <button
+                    className="button quiet"
+                    disabled={
+                      props.active || !inspectedOperations.has(item.operationId)
+                    }
+                    onClick={() =>
+                      void resolvePending(item.operationId, "人工确认已发送")
+                    }
+                  >
+                    确认已发送
+                  </button>
+                  <button
+                    className="button quiet"
+                    disabled={
+                      props.active || !inspectedOperations.has(item.operationId)
+                    }
+                    onClick={() =>
+                      void resolvePending(item.operationId, "人工确认未发送")
+                    }
+                  >
+                    确认未发送
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
     </>
   );
 }
@@ -807,6 +1018,7 @@ function Snapshots({
                   <th>公司</th>
                   <th>城市</th>
                   <th>状态</th>
+                  <th>排除原因</th>
                   <th>处理时间</th>
                 </tr>
               </thead>
@@ -826,6 +1038,15 @@ function Snapshots({
                         {item.status}
                       </span>
                     </td>
+                    <td className="snapshot-reasons">
+                      {item.status === "已排除" &&
+                      item.exclusionReasons !== undefined &&
+                      item.exclusionReasons.length > 0
+                        ? item.exclusionReasons
+                            .map(formatExclusionReason)
+                            .join("；")
+                        : "—"}
+                    </td>
                     <td>{formatDateTime(item.processedAt)}</td>
                   </tr>
                 ))}
@@ -840,15 +1061,50 @@ function Snapshots({
 
 function SettingsView({
   settings,
+  extensionStatus: initialExtensionStatus,
+  sendSession,
   reload,
 }: {
   settings: AppSettings;
+  extensionStatus: ExtensionStatus | undefined;
+  sendSession: SendSessionStatus | undefined;
   reload: () => Promise<void>;
 }) {
   const [draft, setDraft] = useState(settings);
+  const [extensionStatus, setExtensionStatus] = useState(
+    initialExtensionStatus,
+  );
   const [calibrating, setCalibrating] = useState(false);
+  const [calibrationNotice, setCalibrationNotice] = useState<{
+    tone: "neutral" | "success" | "danger";
+    text: string;
+  }>();
   const importInput = useRef<HTMLInputElement>(null);
-  useEffect(() => setDraft(settings), [settings]);
+  useEffect(
+    () => setDraft({ ...settings, realSendEnabled: false }),
+    [settings],
+  );
+  useEffect(
+    () => setExtensionStatus(initialExtensionStatus),
+    [initialExtensionStatus],
+  );
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      try {
+        const status = await api<ExtensionStatus>("/api/extension/status");
+        if (active) setExtensionStatus(status);
+      } catch {
+        // A full-page reload reports local-service errors in the main banner.
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 2_000);
+    void refresh();
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
   const save = async () => {
     await api("/api/settings", { method: "PUT", body: JSON.stringify(draft) });
     await reload();
@@ -856,6 +1112,10 @@ function SettingsView({
   const exportConfiguration = async () => {
     const data = await api<unknown>("/api/export/configuration");
     saveJsonFile(`jobpilot-configuration-${dateStamp()}.json`, data);
+  };
+  const exportOperationLog = async () => {
+    const data = await api<unknown>("/api/export/operations");
+    saveJsonFile(`jobpilot-operation-log-${dateStamp()}.json`, data);
   };
   const importConfiguration = async (file: File | undefined) => {
     if (!file) return;
@@ -873,8 +1133,34 @@ function SettingsView({
       if (importInput.current) importInput.current.value = "";
     }
   };
+  const refreshExtensionStatus = async () => {
+    const status = await api<ExtensionStatus>("/api/extension/status");
+    setExtensionStatus(status);
+    return status;
+  };
+  const approvePairing = async () => {
+    const pending = extensionStatus?.pendingPairing;
+    if (!pending) return;
+    setCalibrating(true);
+    setCalibrationNotice(undefined);
+    try {
+      await api(`/api/extension/pairings/${pending.requestId}/approve`, {
+        method: "POST",
+      });
+      await refreshExtensionStatus();
+      setCalibrationNotice({
+        tone: "success",
+        text: "扩展已配对。请在已登录的 BOSS 标签页中打开扩展并连接当前页面。",
+      });
+    } catch (caught) {
+      setCalibrationNotice({ tone: "danger", text: messageOf(caught) });
+    } finally {
+      setCalibrating(false);
+    }
+  };
   const calibrateBoss = async () => {
     setCalibrating(true);
+    setCalibrationNotice(undefined);
     try {
       const result = await api<{
         calibrated: true;
@@ -882,25 +1168,68 @@ function SettingsView({
       }>("/api/calibration/boss", {
         method: "POST",
       });
-      await reload();
-      window.alert(
-        `只读校准通过，识别到 ${result.candidatesRecognized} 个候选职位。真实发送仍保持关闭。`,
-      );
+      await Promise.all([reload(), refreshExtensionStatus()]);
+      setCalibrationNotice({
+        tone: "success",
+        text: `只读校准通过，识别到 ${result.candidatesRecognized} 个候选职位。`,
+      });
     } catch (caught) {
-      window.alert(
-        `${messageOf(caught)}\n\n如果专用浏览器已经打开，请在其中手动登录后再次点击校准。`,
-      );
+      setCalibrationNotice({
+        tone: "danger",
+        text: `${messageOf(caught)} 请确认已连接的 BOSS 页面仍处于登录状态。`,
+      });
     } finally {
       setCalibrating(false);
+    }
+  };
+  const disconnectPage = async () => {
+    try {
+      await api("/api/extension/disconnect", { method: "POST" });
+      await refreshExtensionStatus();
+      setCalibrationNotice({ tone: "neutral", text: "已解除页面连接。" });
+    } catch (caught) {
+      setCalibrationNotice({ tone: "danger", text: messageOf(caught) });
+    }
+  };
+  const resetPairing = async () => {
+    if (!window.confirm("重置后需要重新核对配对码，确认继续吗？")) return;
+    try {
+      await api("/api/extension/pairing/reset", { method: "POST" });
+      await refreshExtensionStatus();
+      setCalibrationNotice({ tone: "neutral", text: "扩展配对已重置。" });
+    } catch (caught) {
+      setCalibrationNotice({ tone: "danger", text: messageOf(caught) });
+    }
+  };
+  const resetQualification = async () => {
+    if (
+      !window.confirm(
+        "这会清除本机永久保存的真实发送资格，后续需要重新完成 5 次验证批次。确认继续吗？",
+      )
+    )
+      return;
+    try {
+      await api("/api/send/qualification/reset", { method: "POST" });
+      await reload();
+      setCalibrationNotice({ tone: "neutral", text: "本机发送资格已重置。" });
+    } catch (caught) {
+      setCalibrationNotice({ tone: "danger", text: messageOf(caught) });
     }
   };
   return (
     <>
       <PageHeading
         title="设置"
-        description="账号状态、运行模式和真实发送开关都保存在本机，不进入仓库或配置导出。"
+        description="页面连接、发送资格和操作账本都只保存在本机；每次进程启动仍需重新授权发送。"
         action={
           <div className="heading-actions">
+            <button
+              className="button quiet"
+              onClick={() => void exportOperationLog()}
+            >
+              <Download size={16} />
+              导出操作账本
+            </button>
             <button
               className="button quiet"
               onClick={() => void exportConfiguration()}
@@ -957,6 +1286,11 @@ function SettingsView({
                   setDraft({ ...draft, cooldownMs: Number(e.target.value) })
                 }
               />
+              {draft.adapterMode === "boss" && (
+                <small>
+                  真实页面不可低于 5000 毫秒；更小的值只用于本地演示。
+                </small>
+              )}
             </Field>
           </div>
         </section>
@@ -964,7 +1298,9 @@ function SettingsView({
           <div>
             <Gauge size={20} />
             <h2>平台模式</h2>
-            <p>真实模式仍需完成只读校准并显式解锁发送。</p>
+            <p>
+              真实页面按验证批次逐步取得资格；本地演示不会写入 Boss 去重账本。
+            </p>
           </div>
           <div className="segmented">
             <button
@@ -990,50 +1326,153 @@ function SettingsView({
         <section className="settings-section risk-section">
           <div>
             <AlertTriangle size={20} />
-            <h2>真实发送闸门</h2>
+            <h2>Chrome 扩展与页面连接</h2>
             <p>
-              启用后，达标职位会在确认批次后直接发送消息。该动作可能违反平台协议。
+              JobPilot
+              不再启动或控制浏览器。登录由本人完成，扩展只连接你明确选择的一个
+              BOSS 标签页。
             </p>
           </div>
           <div className="toggle-stack">
+            <ol className="extension-steps">
+              <li>
+                运行构建后，在 Chrome 扩展页加载 <code>dist/extension</code>。
+              </li>
+              <li>
+                建议新建一个仅用于求职的 Chrome 配置文件，并由本人登录 BOSS。
+              </li>
+              <li>打开扩展；首次连接时核对下方配对码并批准。</li>
+              <li>在目标 BOSS 标签页中点击“连接当前页面”，再校准读取能力。</li>
+            </ol>
+            <div className="extension-status-grid" aria-live="polite">
+              <span>扩展配对</span>
+              <strong>{extensionStatus?.pairingState ?? "正在读取…"}</strong>
+              <span>本机连接</span>
+              <strong>{extensionStatus?.connectionState ?? "正在读取…"}</strong>
+              <span>页面能力</span>
+              <strong>
+                {extensionStatus?.capabilities.includes("read")
+                  ? extensionStatus.capabilities.includes("batch-send")
+                    ? "读取 + 批次发送"
+                    : "只读"
+                  : "尚未报告"}
+              </strong>
+            </div>
+            {extensionStatus?.pendingPairing && (
+              <div className="pairing-panel">
+                <div>
+                  <span>请与扩展弹窗核对配对码</span>
+                  <strong>{extensionStatus.pendingPairing.code}</strong>
+                </div>
+                <button
+                  className="button primary"
+                  disabled={calibrating}
+                  onClick={() => void approvePairing()}
+                >
+                  批准此扩展
+                </button>
+              </div>
+            )}
+            {extensionStatus?.page && (
+              <div className="bound-page">
+                <div>
+                  <strong>已连接 BOSS 页面</strong>
+                  <small title={extensionStatus.page.url}>
+                    {extensionStatus.page.url}
+                  </small>
+                </div>
+                <button
+                  className="button quiet"
+                  onClick={() => void disconnectPage()}
+                >
+                  解除页面连接
+                </button>
+              </div>
+            )}
             <button
               className="button quiet calibration-button"
-              disabled={calibrating}
+              disabled={
+                calibrating || extensionStatus?.connectionState !== "页面已连接"
+              }
               onClick={() => void calibrateBoss()}
             >
               <Gauge size={16} />
-              {calibrating ? "正在打开并检查…" : "打开专用浏览器并只读校准"}
+              {calibrating ? "正在校准…" : "校准页面读取"}
             </button>
+            {calibrationNotice && (
+              <div
+                className={`calibration-notice ${calibrationNotice.tone}`}
+                role="status"
+              >
+                {calibrationNotice.text}
+              </div>
+            )}
             <label className="toggle-row">
               <input
                 type="checkbox"
-                checked={draft.readOnlySmokePassed}
+                checked={extensionStatus?.readOnlyCalibrated ?? false}
                 disabled
                 readOnly
               />
               <span>
                 <strong>只读校准已经通过</strong>
                 <small>
-                  系统确认登录、搜索和职位列表结构仍受支持；页面变化后需重新校准。
+                  只对当前已连接页面有效；页面断开或重新配对后需重新校准。
                 </small>
               </span>
             </label>
             <label className="toggle-row">
               <input
                 type="checkbox"
-                checked={draft.realSendEnabled}
-                disabled={
-                  !draft.readOnlySmokePassed || draft.adapterMode !== "boss"
+                checked={
+                  extensionStatus?.capabilities.includes("batch-send") ?? false
                 }
-                onChange={(e) =>
-                  setDraft({ ...draft, realSendEnabled: e.target.checked })
-                }
+                disabled
+                readOnly
               />
               <span>
-                <strong>解锁真实发送</strong>
-                <small>不会自动启动批次，但允许启动按钮执行真实沟通。</small>
+                <strong>扩展支持原子批次发送</strong>
+                <small>
+                  每个联系人只下发一个持久化命令；不可逆动作不会自动重试。
+                </small>
               </span>
             </label>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={sendSession?.qualified ?? false}
+                disabled
+                readOnly
+              />
+              <span>
+                <strong>
+                  {sendSession?.qualified
+                    ? "本机已取得完整批次资格"
+                    : `验证进度 ${sendSession?.validationSuccesses ?? 0}/5`}
+                </strong>
+                <small>
+                  待核对结果 {sendSession?.pendingCount ?? 0}
+                  个；存在待核对项时不会晋级。
+                </small>
+              </span>
+            </label>
+            {((sendSession?.validationSuccesses ?? 0) > 0 ||
+              sendSession?.qualified) && (
+              <button
+                className="button danger-quiet"
+                onClick={() => void resetQualification()}
+              >
+                重置本机发送资格
+              </button>
+            )}
+            {extensionStatus?.pairingState === "已配对" && (
+              <button
+                className="button danger-quiet"
+                onClick={() => void resetPairing()}
+              >
+                重置扩展配对
+              </button>
+            )}
           </div>
         </section>
       </div>
@@ -1101,16 +1540,40 @@ function statusTone(
 ): "neutral" | "active" | "warning" | "danger" | "success" {
   if (state === "已完成") return "success";
   if (state === "已失败") return "danger";
-  if (state === "人工接管" || state === "等待人工登录" || state === "正在停止")
+  if (
+    state === "已完成有异常" ||
+    state === "人工接管" ||
+    state === "等待人工登录" ||
+    state === "等待页面就绪" ||
+    state === "正在停止"
+  )
     return "warning";
   if (state === "空闲") return "neutral";
   return "active";
 }
 function snapshotTone(status: string) {
   if (status === "沟通成功") return "success";
-  if (status === "结果未知" || status === "明确失败") return "danger";
+  if (status === "结果未知" || status === "内容不符") return "danger";
   if (status === "已排除" || status === "已跳过") return "neutral";
   return "warning";
+}
+
+function formatExclusionReason(
+  reason: NonNullable<PositionSnapshot["exclusionReasons"]>[number],
+): string {
+  const labels: Record<string, string> = {
+    "title:keyword-mismatch": "职位关键词不匹配",
+    "location:city-mismatch": "城市不符合方案",
+    "location:region-mismatch": "区域不符合方案",
+    "remote:not-allowed": "不接受远程职位",
+    "salary:below-minimum": "薪资低于最低要求",
+    "experience:above-maximum": "经验要求超过上限",
+    "education:above-candidate": "学历要求过高",
+    "company:blacklisted": "公司在黑名单中",
+    "industry:blacklisted": "行业在黑名单中",
+    "publishedAt:too-old": "发布时间超过期限",
+  };
+  return labels[`${reason.field}:${reason.code}`] ?? "不符合硬性规则";
 }
 function splitList(value: string): string[] {
   return value

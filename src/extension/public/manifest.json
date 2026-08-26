@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "JobPilot · BOSS 页面连接器",
+  "description": "将求职者明确选择的 BOSS 标签页连接到本机 JobPilot。",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuhRYVEUhFq920pbR61O7ncBLuSFmmuFjN21ICjFfzrJkLeG1eifQFN8h0uOsuvLx8d7OnE+CNlmEf/ZcuGuHRHW7Lgp98Hz6sK65yRzPL18BOpMph/E4cxPShxdgq46VYJlZ0FomPPU/q7OoThuAZC1xfZ/jq4r1nPSL5bPaEfw0JMCgpfIYUxisOZymvDh5oph1uSHaM58yjSu9neMDq66qAf+a5s0oN0+utehcBVtBSfHwa+VSsor15Hn1uQna/xM7F/pdR+N0XXSSX6oojrFL/aREMPoM/9rB2sDB8JY3YU45c8iPFOPeiZnXtAAJ6svltk1uE3Oduqw1wl89twIDAQAB",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://zhipin.com/*",
+    "https://*.zhipin.com/*",
+    "http://127.0.0.1:4317/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "连接当前 BOSS 标签页",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://zhipin.com/*", "https://*.zhipin.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -27,11 +27,16 @@ export function createSwitchingAdapter(
         active = undefined;
       }
     },
-    currentContactState(candidate) {
-      return (active ?? choose()).currentContactState(candidate);
+    inspect(candidate) {
+      return (active ?? choose()).inspect(candidate);
     },
-    sendOpening(candidate, message) {
-      return (active ?? choose()).sendOpening(candidate, message);
+    sendOpening(request) {
+      return (active ?? choose()).sendOpening(request);
+    },
+    waitUntilReady(onWaiting) {
+      return (
+        (active ?? choose()).waitUntilReady?.(onWaiting) ?? Promise.resolve()
+      );
     },
     emergencyStop() {
       return (active ?? choose()).emergencyStop?.();

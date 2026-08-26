@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JobPilot 页面连接</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="mark">JP</span>
+        <div>
+          <strong>JobPilot</strong>
+          <small>BOSS 页面连接器</small>
+        </div>
+      </header>
+      <section>
+        <strong id="status">正在检查…</strong>
+        <p id="detail"></p>
+      </section>
+      <button id="connect" disabled>连接当前 BOSS 标签页</button>
+      <button id="stop" class="danger" disabled>紧急停止并解除连接</button>
+      <p class="footnote">
+        当前版本仅用于只读校准；不会读取 Cookie，也不包含投递或发送消息能力。
+      </p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

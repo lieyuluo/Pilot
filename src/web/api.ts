@@ -3,10 +3,12 @@ export type BatchState =
   | "扫描"
   | "规则评估"
   | "发起沟通"
+  | "等待页面就绪"
   | "等待人工登录"
   | "人工接管"
   | "正在停止"
   | "已完成"
+  | "已完成有异常"
   | "已失败";
 
 export interface SearchPlan {
@@ -43,6 +45,19 @@ export interface PositionSnapshot {
   company: string;
   city?: string;
   status: string;
+  exclusionReasons?: Array<{
+    field:
+      | "title"
+      | "location"
+      | "salary"
+      | "experience"
+      | "education"
+      | "company"
+      | "industry"
+      | "publishedAt"
+      | "remote";
+    code: string;
+  }>;
   processedAt: string;
 }
 
@@ -50,19 +65,63 @@ export interface AppSettings {
   accountNote: string;
   adapterMode: "fake" | "boss";
   realSendEnabled: boolean;
-  readOnlySmokePassed: boolean;
   cooldownMs: number;
 }
 
+export type ExtensionCapability = "read" | "batch-send";
+
+export interface ExtensionStatus {
+  pairingState: "未配对" | "等待批准" | "已配对";
+  connectionState: "未连接" | "扩展已连接" | "页面已连接";
+  extensionVersion?: string;
+  adapterVersion?: number;
+  capabilities: ExtensionCapability[];
+  readOnlyCalibrated: boolean;
+  pendingPairing?: { requestId: string; code: string };
+  page?: {
+    tabId: number;
+    url: string;
+    active: boolean;
+    visible: boolean;
+    accountDisplayName?: string;
+  };
+}
+
 export interface BatchSummary {
-  state: "已完成" | "人工接管" | "已失败";
+  state: "已完成" | "已完成有异常" | "人工接管" | "已失败";
   candidatesChecked: number;
   contactsSucceeded: number;
+  creditsUsed?: number;
+  unknownCount?: number;
+  mismatchCount?: number;
   reason: string;
+}
+
+export interface PendingContactOperation {
+  operationId: string;
+  identity: string;
+  title: string;
+  company: string;
+  messageHash: string;
+  messageLength: number;
+  updatedAt: string;
+}
+
+export interface SendSessionStatus {
+  armed: boolean;
+  validationSuccesses: number;
+  pendingCount: number;
+  qualified: boolean;
+  creditsUsed: number;
+  contactsSucceeded: number;
+  unknownCount: number;
+  mismatchCount: number;
+  pending?: PendingContactOperation[];
 }
 
 export interface AppStatus {
   batchState: BatchState;
+  sendSession?: SendSessionStatus;
   lastSummary?: BatchSummary;
 }
 

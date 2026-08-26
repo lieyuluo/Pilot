@@ -52,17 +52,21 @@ export function createFakeAdapter(): PlatformAdapter {
         yield position;
       }
     },
-    async currentContactState(candidate) {
-      return candidate.id !== undefined && contacted.has(candidate.id)
-        ? "已沟通"
-        : "可沟通";
+    async inspect(candidate) {
+      return {
+        candidate,
+        contactState:
+          candidate.id !== undefined && contacted.has(candidate.id)
+            ? "平台已沟通"
+            : "可沟通",
+      } as const;
     },
-    async sendOpening(candidate) {
+    async sendOpening({ candidate }) {
       await delay(320);
       if (candidate.id !== undefined) {
         contacted.add(candidate.id);
       }
-      return "已确认";
+      return "沟通成功";
     },
   };
 }

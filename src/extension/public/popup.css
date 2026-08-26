@@ -1,0 +1,81 @@
+:root {
+  color: #18201d;
+  background: #f4f7f5;
+  font:
+    14px/1.45 Inter,
+    "Microsoft YaHei",
+    sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+main {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+header div,
+section {
+  display: grid;
+  gap: 2px;
+}
+
+.mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 10px;
+  color: white;
+  background: #1c7c57;
+  font-weight: 800;
+}
+
+small,
+p {
+  margin: 0;
+  color: #607069;
+}
+
+section {
+  min-height: 54px;
+  padding: 12px;
+  border: 1px solid #dce5e0;
+  border-radius: 10px;
+  background: white;
+}
+
+button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 9px;
+  color: white;
+  background: #176d4d;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.danger {
+  color: #9c2f2f;
+  background: #fae9e9;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.footnote {
+  font-size: 12px;
+}

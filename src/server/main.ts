@@ -3,47 +3,41 @@ import { join } from "node:path";
 
 import fastifyStatic from "@fastify/static";
 
-import { createBossAdapter } from "../adapters/boss/boss-adapter.ts";
+import { createExtensionBossAdapter } from "../adapters/boss/extension-boss-adapter.ts";
 import { createFakeAdapter } from "../adapters/fake/fake-adapter.ts";
 import { createSwitchingAdapter } from "../adapters/switching-adapter.ts";
 import { createBatchRunner } from "../core/batch-runner.ts";
 import { createBatchEventBus } from "../core/events.ts";
-import { buildServer, type AppSettings } from "./app.ts";
+import { createExtensionBridge } from "../extension/bridge.ts";
+import { buildServer, readAppSettings } from "./app.ts";
 import { resolveAppPaths } from "./paths.ts";
-import { deleteFilesOlderThan } from "./retention.ts";
 import { openJobPilotStore } from "../storage/store.ts";
 
 const paths = resolveAppPaths();
-for (const directory of [
-  paths.root,
-  paths.browserProfile,
-  paths.evidence,
-  paths.backups,
-]) {
+for (const directory of [paths.root, paths.backups]) {
   mkdirSync(directory, { recursive: true });
 }
-deleteFilesOlderThan(paths.evidence, 14 * 86_400_000);
 if (existsSync(paths.database)) {
   const timestamp = new Date().toISOString().replaceAll(":", "-");
   copyFileSync(paths.database, join(paths.backups, `jobpilot-${timestamp}.db`));
 }
 
 const store = openJobPilotStore(paths.database);
+store.recoverInterruptedContactOperations(new Date().toISOString());
 seedExamples();
+if (!store.getSetting("extensionArchitectureMigrated", false)) {
+  store.setSetting("app", {
+    ...readAppSettings(store),
+    realSendEnabled: false,
+  });
+  store.setSetting("extensionArchitectureMigrated", true);
+}
 const eventBus = createBatchEventBus();
 const fakeAdapter = createFakeAdapter();
-const bossAdapter = createBossAdapter({
-  userDataDir: paths.browserProfile,
-  evidenceDir: paths.evidence,
-  realSendEnabled: () =>
-    store.getSetting<AppSettings>("app", {
-      accountNote: "本地演示模式",
-      adapterMode: "fake",
-      realSendEnabled: false,
-      readOnlySmokePassed: false,
-      cooldownMs: 5_000,
-    }).realSendEnabled,
+const extensionBridge = createExtensionBridge({
+  settings: store,
 });
+const bossAdapter = createExtensionBossAdapter(extensionBridge);
 const adapter = createSwitchingAdapter({
   store,
   fake: fakeAdapter,
@@ -52,14 +46,19 @@ const adapter = createSwitchingAdapter({
 const runner = createBatchRunner({
   store,
   adapter,
-  cooldownMs: () => store.getSetting("app", { cooldownMs: 5_000 }).cooldownMs,
+  cooldownMs: () => {
+    const settings = readAppSettings(store);
+    return settings.adapterMode === "boss"
+      ? Math.max(settings.cooldownMs, 5_000)
+      : settings.cooldownMs;
+  },
   onEvent: eventBus.publish,
 });
 const server = buildServer({
   store,
   batchRunner: runner,
   eventBus,
-  calibrateBoss: (plan) => bossAdapter.calibrate(plan),
+  extensionBridge,
 });
 
 if (existsSync(join(process.cwd(), "dist", "web"))) {

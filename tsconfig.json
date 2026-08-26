@@ -13,12 +13,13 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "skipLibCheck": true,
-    "types": ["node", "vite/client", "vitest/globals"]
+    "types": ["node", "chrome", "vite/client", "vitest/globals"]
   },
   "include": [
     "src",
     "tests",
     "vite.config.ts",
+    "vite.extension.config.ts",
     "vitest.config.ts",
     "playwright.config.ts"
   ]

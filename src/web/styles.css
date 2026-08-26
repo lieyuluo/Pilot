@@ -675,6 +675,12 @@ td small {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.snapshot-reasons {
+  min-width: 170px;
+  max-width: 300px;
+  color: var(--muted);
+  line-height: 1.55;
+}
 .status-label.state-success {
   color: var(--success);
   background: var(--success-soft);
@@ -745,11 +751,87 @@ td small {
 }
 .toggle-stack {
   display: grid;
-  gap: 2px;
+  gap: 8px;
+}
+.extension-steps {
+  margin: 0 0 6px;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.extension-steps code {
+  color: var(--ink);
+}
+.extension-status-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 7px 14px;
+  width: min(100%, 620px);
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 12px;
+}
+.extension-status-grid span {
+  color: var(--muted);
+}
+.pairing-panel,
+.bound-page {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: min(100%, 620px);
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+}
+.pairing-panel > div,
+.bound-page > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.pairing-panel span,
+.bound-page small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.pairing-panel strong {
+  font-size: 22px;
+  letter-spacing: 0.18em;
+}
+.bound-page small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .calibration-button {
   width: fit-content;
   margin-bottom: 4px;
+}
+.calibration-notice {
+  width: min(100%, 620px);
+  margin: 4px 0 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.calibration-notice.success {
+  border-color: oklch(0.82 0.05 155);
+  background: var(--success-soft);
+}
+.calibration-notice.danger {
+  border-color: oklch(0.82 0.07 28);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .confirm-dialog {
