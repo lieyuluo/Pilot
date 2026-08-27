@@ -1,0 +1,31 @@
+{
+  "id": "fix-boss-success-dialog",
+  "name": "fix-boss-success-dialog",
+  "title": "Fix BOSS success dialog handling",
+  "description": "Recognize the live BOSS success receipt instead of recording an unknown contact result",
+  "status": "in_progress",
+  "dev_type": "bugfix",
+  "scope": "src/extension/boss-dom.ts and focused extension tests",
+  "package": "extension",
+  "priority": "P2",
+  "creator": "FallestRain",
+  "assignee": "FallestRain",
+  "createdAt": "2026-08-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "src/extension/boss-dom.ts",
+    "tests/extension/boss-dom.test.ts",
+    "src/extension/protocol.ts",
+    "docs/adr/0014-accept-platform-contact-success-receipt.md"
+  ],
+  "notes": "",
+  "meta": {}
+}

@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/extension/index.md", "reason": "Extension pre-development and safety checklist"}
+{"file": ".trellis/spec/extension/dom-automation.md", "reason": "BOSS receipt evidence, DOM isolation, and fixture rules"}
+{"file": ".trellis/spec/backend/core-batch-guidelines.md", "reason": "Irreversible-result and success semantics"}
+{"file": ".trellis/spec/quality/typescript-style.md", "reason": "Strict TypeScript and local code conventions"}
+{"file": ".trellis/spec/quality/testing-and-build.md", "reason": "Required test seams and build commands"}
+{"file": ".trellis/tasks/08-27-fix-boss-success-dialog/research/diagnosis.md", "reason": "Prior attempts, current green approximation, and missing live DOM evidence"}

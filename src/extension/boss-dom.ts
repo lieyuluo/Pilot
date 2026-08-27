@@ -206,37 +206,40 @@ export async function sendOpeningFromDocument(
   async function continueFromSuccessDialog(
     dialog: HTMLElement,
   ): Promise<DomSendOpeningResult> {
-    const stayButton = [
-      ...dialog.querySelectorAll<HTMLElement>("button, a"),
-    ].find(
-      (element) =>
-        isElementAvailable(element) &&
-        /^留在此页(?:继续沟通)?$/.test(compactText(textOf(element))),
-    );
-    if (stayButton === undefined) {
-      return result(
-        "沟通成功",
-        irreversibleStarted,
-        "已确认平台成功回执，但没有找到“留在此页继续沟通”按钮",
-        "boss-success-dialog",
-      );
-    }
+    try {
+      const continueButton = findContinueChatControl(dialog);
+      if (continueButton === undefined) {
+        return result(
+          "沟通成功",
+          irreversibleStarted,
+          "已确认平台成功回执，但没有找到“继续沟通”入口",
+          "boss-success-dialog",
+        );
+      }
 
-    stayButton.click();
-    const templateBaselineCount = outgoingMessages(document).length;
-    const composer = await waitForOptional(
-      () => findChatComposer(document),
-      Math.min(5_000, remainingTime()),
-    );
-    if (composer === undefined) {
+      continueButton.click();
+      const templateBaselineCount = outgoingMessages(document).length;
+      const composer = await waitForOptional(
+        () => findChatComposer(document),
+        Math.min(5_000, remainingTime()),
+      );
+      if (composer === undefined) {
+        return result(
+          "沟通成功",
+          irreversibleStarted,
+          "已确认平台成功回执，但聊天输入框暂不可用",
+          "boss-success-dialog",
+        );
+      }
+      return await sendAndConfirm(composer, templateBaselineCount, true);
+    } catch {
       return result(
         "沟通成功",
         irreversibleStarted,
-        "已确认平台成功回执，但聊天输入框暂不可用",
+        "已确认平台成功回执，但未能继续发送开场模板",
         "boss-success-dialog",
       );
     }
-    return await sendAndConfirm(composer, templateBaselineCount, true);
   }
 
   async function sendAndConfirm(
@@ -321,25 +324,44 @@ export async function sendOpeningFromDocument(
 }
 
 function findBossSuccessDialog(document: Document): HTMLElement | undefined {
-  const seeds = [
-    ...document.querySelectorAll<HTMLElement>(
-      '[role="dialog"], [aria-modal="true"], [class*="dialog"], [class*="modal"]',
-    ),
-  ].filter(
-    (element) =>
-      element !== document.body &&
-      element !== document.documentElement &&
-      isElementAvailable(element),
+  const titleSeeds = exactTextContainers(document, "已向BOSS发送消息").filter(
+    isElementAvailable,
   );
-  const candidates = [
+  const matches = ancestorCandidates(titleSeeds).filter(
+    (element) => isDialogCandidate(element) && hasBossSuccessReceipt(element),
+  );
+  return (
+    matches.find(hasSuccessDialogAction) ??
+    matches.find(isSemanticDialogCandidate)
+  );
+}
+
+function exactTextContainers(
+  document: Document,
+  expected: string,
+): HTMLElement[] {
+  const matches: HTMLElement[] = [];
+  const walker = document.createTreeWalker(
+    document.body,
+    4 /* NodeFilter.SHOW_TEXT */,
+  );
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    if (compactText(node.textContent ?? "") !== expected) continue;
+    if (node.parentElement !== null) matches.push(node.parentElement);
+  }
+  return [...new Set(matches)];
+}
+
+function ancestorCandidates(seeds: HTMLElement[]): HTMLElement[] {
+  return [
     ...new Set(
       seeds.flatMap((seed) => {
         const ancestors: HTMLElement[] = [];
         for (
           let current: HTMLElement | null = seed;
           current !== null &&
-          current !== document.body &&
-          current !== document.documentElement;
+          current !== current.ownerDocument.body &&
+          current !== current.ownerDocument.documentElement;
           current = current.parentElement
         ) {
           ancestors.push(current);
@@ -351,22 +373,94 @@ function findBossSuccessDialog(document: Document): HTMLElement | undefined {
     (left, right) =>
       left.querySelectorAll("*").length - right.querySelectorAll("*").length,
   );
-  const matches = candidates.filter((element) => {
-    const text = compactText(textOf(element));
-    return (
-      text.includes("已向BOSS发送消息") &&
-      (/设置(?:打)?招呼语/.test(text) || hasStayOnPageControl(element))
-    );
-  });
-  return matches.find(hasStayOnPageControl) ?? matches[0];
 }
 
-function hasStayOnPageControl(element: HTMLElement): boolean {
-  return [...element.querySelectorAll<HTMLElement>("button, a")].some(
-    (control) =>
-      isElementAvailable(control) &&
-      /^留在此页(?:继续沟通)?$/.test(compactText(textOf(control))),
+function isDialogCandidate(element: HTMLElement): boolean {
+  if (
+    element === element.ownerDocument.body ||
+    element === element.ownerDocument.documentElement ||
+    !isElementAvailable(element)
+  ) {
+    return false;
+  }
+  if (
+    element.getAttribute("role") === "dialog" ||
+    element.getAttribute("aria-modal") === "true"
+  ) {
+    return true;
+  }
+  const hint = `${element.id} ${element.className}`.toLowerCase();
+  return /dialog|modal|greet|expect|popup|popper|layer/.test(hint);
+}
+
+function isSemanticDialogCandidate(element: HTMLElement): boolean {
+  if (
+    element.getAttribute("role") === "dialog" ||
+    element.getAttribute("aria-modal") === "true"
+  ) {
+    return true;
+  }
+  const hint = `${element.id} ${element.className}`.toLowerCase();
+  return /dialog|modal/.test(hint);
+}
+
+function hasBossSuccessReceipt(element: HTMLElement): boolean {
+  const text = compactText(textOf(element));
+  return (
+    exactTextContainers(element.ownerDocument, "已向BOSS发送消息").some(
+      (title) => title === element || element.contains(title),
+    ) &&
+    (/设置(?:打)?招呼语/.test(text) || hasSuccessDialogAction(element))
   );
+}
+
+function hasSuccessDialogAction(element: HTMLElement): boolean {
+  return ["留在此页", "留在此页继续沟通", "继续沟通"].some(
+    (label) => findExactTextAction(element, label) !== undefined,
+  );
+}
+
+function findContinueChatControl(
+  element: HTMLElement,
+): HTMLElement | undefined {
+  return (
+    findExactTextAction(element, "继续沟通") ??
+    findExactTextAction(element, "留在此页继续沟通") ??
+    findExactTextAction(element, "留在此页")
+  );
+}
+
+function findExactTextAction(
+  element: HTMLElement,
+  expected: string,
+): HTMLElement | undefined {
+  const interactive = [
+    ...element.querySelectorAll<HTMLElement>(
+      'button, a, [role="button"], input[type="button"], input[type="submit"]',
+    ),
+  ].find(
+    (control) =>
+      isElementAvailable(control) && actionText(control) === expected,
+  );
+  if (interactive !== undefined) return interactive;
+
+  return [...element.querySelectorAll<HTMLElement>("*")]
+    .filter(
+      (control) =>
+        isElementAvailable(control) && actionText(control) === expected,
+    )
+    .sort(
+      (left, right) =>
+        left.querySelectorAll("*").length - right.querySelectorAll("*").length,
+    )[0];
+}
+
+function actionText(element: HTMLElement): string {
+  const value =
+    element.tagName === "INPUT"
+      ? (element.getAttribute("value") ?? element.getAttribute("aria-label"))
+      : textOf(element);
+  return compactText(value ?? "");
 }
 
 function findChatComposer(document: Document): HTMLElement | undefined {
@@ -374,15 +468,28 @@ function findChatComposer(document: Document): HTMLElement | undefined {
     ...document.querySelectorAll<HTMLElement>(
       'textarea, [contenteditable="true"], input[type="text"]',
     ),
-  ].find((element) => {
-    if (!isElementAvailable(element)) return false;
-    if (element.tagName !== "INPUT") return true;
-    return (
-      element.closest(
-        'form, [class*="chat"], [class*="message"], [class*="dialog"]',
-      ) !== null
-    );
-  });
+  ].find(isChatComposer);
+}
+
+function isChatComposer(element: HTMLElement): boolean {
+  if (!isElementAvailable(element)) return false;
+  if (
+    element.matches('input[type="search"], [role="searchbox"]') ||
+    element.closest('[role="search"]') !== null
+  ) {
+    return false;
+  }
+  const chatContext = element.closest(
+    '[class*="chat"], [class*="message"], [class*="conversation"], [id*="chat"], [id*="message"], [id*="conversation"]',
+  );
+  const inputHint = compactText(
+    [
+      element.getAttribute("placeholder") ?? "",
+      element.getAttribute("aria-label") ?? "",
+      element.getAttribute("data-placeholder") ?? "",
+    ].join(" "),
+  );
+  return chatContext !== null || /消息|沟通|发送/.test(inputHint);
 }
 
 function findSendButton(
