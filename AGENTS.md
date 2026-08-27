@@ -20,8 +20,8 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 <!-- TRELLIS:END -->
 
-## GitHub 自动推送
+## Automatic GitHub Push
 
-- 每次做出代码改动并完成必要验证后，自动提交本次任务涉及的改动并推送到当前 GitHub 远程分支。
-- 提交信息使用简短的 2–5 个英文单词。
-- 如果提交或推送失败，立即向用户说明原因，不得静默忽略。
+- After every code change and the necessary verification, automatically commit the changes related to the current task and push them to the current GitHub remote branch.
+- Use a short commit message consisting of 2–5 English words.
+- If the commit or push fails, immediately inform the user of the reason; never ignore the failure silently.
