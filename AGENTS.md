@@ -19,3 +19,9 @@ If you're using Codex or another agent-capable tool, additional project-scoped h
 Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
 
 <!-- TRELLIS:END -->
+
+## GitHub 自动推送
+
+- 每次做出代码改动并完成必要验证后，自动提交本次任务涉及的改动并推送到当前 GitHub 远程分支。
+- 提交信息使用简短的 2–5 个英文单词。
+- 如果提交或推送失败，立即向用户说明原因，不得静默忽略。
