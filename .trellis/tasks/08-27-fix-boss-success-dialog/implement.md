@@ -60,3 +60,16 @@ and dirty-worktree scope.
 
 The task is not archived until automated checks pass and the user has the rebuilt
 extension ready for this manual confirmation.
+
+## 7. Response-Channel Timing Follow-up
+
+- Record the live evidence that receipt detection and the “继续沟通” click both
+  succeed before the batch still records `结果未知`.
+- Add a content-script regression where responses made after the continuation
+  click are treated as a destroyed channel.
+- Notify the content script synchronously after strict receipt qualification
+  and before the navigation-capable click.
+- Guard the Chrome callback so a delivered success cannot be replaced by the
+  later best-effort result, while a synchronous callback exception still allows
+  the final confirmed-success result to retry.
+- Re-run focused content-script/DOM tests and the full extension quality gate.

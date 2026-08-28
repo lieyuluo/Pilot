@@ -2,10 +2,15 @@
 
 ## Scope and Boundaries
 
-The change remains inside the BOSS DOM adapter and its focused tests:
+The change remains inside the BOSS DOM adapter, content-script dispatch, and
+their focused tests:
 
 - `src/extension/boss-dom.ts` owns receipt discovery and continuation clicks.
+- `src/extension/content-script.ts` owns returning the atomic result to the
+  service worker while the current document still exists.
 - `tests/extension/boss-dom.test.ts` owns the deterministic DOM regression.
+- `tests/extension/content-script.test.ts` owns response-channel timing and
+  single-response regressions.
 - The batch runner, extension protocol, service worker, persistence, quotas, and
   UI state model are unchanged unless the red test proves a contract gap.
 
@@ -57,6 +62,21 @@ No retry boundary changes. Once the first contact click occurs:
   returns `沟通成功` with `boss-success-dialog` evidence;
 - absence of qualifying evidence remains `结果未知` or `内容不符` under the
   existing algorithm.
+
+## Response-Channel Ordering
+
+The content-script response channel belongs to the current document. Clicking
+“继续沟通” may perform full-page navigation, so awaiting all best-effort chat
+work before calling Chrome's response callback can lose an already-conclusive
+success result.
+
+After strict receipt qualification, `sendOpeningFromDocument` synchronously
+notifies the content-script dispatcher before it clicks the continuation
+control. The dispatcher returns that result once and ignores the later Promise
+completion. It marks the response as delivered only after the callback returns,
+so a synchronous callback failure does not suppress the final confirmed-success
+attempt. No extension protocol field, result union, or adapter capability
+changes; therefore neither protocol nor BOSS adapter version is incremented.
 
 ## Validation and Rollback
 

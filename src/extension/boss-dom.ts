@@ -126,6 +126,7 @@ export async function sendOpeningFromDocument(
   document: Document,
   message: string,
   timeoutMs = 10_000,
+  onSuccessReceipt?: (result: DomSendOpeningResult) => void,
 ): Promise<DomSendOpeningResult> {
   const baseline = outgoingMessages(document);
   const deadline = Date.now() + timeoutMs;
@@ -206,6 +207,17 @@ export async function sendOpeningFromDocument(
   async function continueFromSuccessDialog(
     dialog: HTMLElement,
   ): Promise<DomSendOpeningResult> {
+    const confirmedResult = result(
+      "沟通成功",
+      irreversibleStarted,
+      undefined,
+      "boss-success-dialog",
+    );
+    try {
+      onSuccessReceipt?.(confirmedResult);
+    } catch {
+      // The receipt is already conclusive; a notification failure cannot revoke it.
+    }
     try {
       const continueButton = findContinueChatControl(dialog);
       if (continueButton === undefined) {

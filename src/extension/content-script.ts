@@ -43,12 +43,23 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, respond) => {
     return false;
   }
   if (message.type === "send_opening") {
-    void sendOpeningFromDocument(document, message.message).then((result) =>
+    let responded = false;
+    // “继续沟通” may replace this document and close the response channel.
+    // A conclusive receipt must therefore be returned before that click.
+    const respondOnce = (result: DomSendOpeningResult) => {
+      if (responded) return;
       respond({
         inspection: inspectBossPage(document, location.href),
         ...result,
-      }),
-    );
+      });
+      responded = true;
+    };
+    void sendOpeningFromDocument(
+      document,
+      message.message,
+      undefined,
+      respondOnce,
+    ).then(respondOnce);
     return true;
   }
   return false;
@@ -86,6 +97,8 @@ type ContentRequest =
   | { type: "inspect_page" | "read_candidates" | "read_contact_state" }
   | { type: "inspect_position"; candidate: CandidatePosition }
   | { type: "send_opening"; message: string };
+
+type DomSendOpeningResult = Awaited<ReturnType<typeof sendOpeningFromDocument>>;
 
 function isRequest(value: unknown): value is ContentRequest {
   return (

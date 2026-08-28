@@ -23,6 +23,12 @@ limits.
 - A screenshot-derived minimal DOM with the same visible text and split buttons
   currently passes the focused test, so the screenshot alone is not a
   red-capable reproduction of the live failure.
+- Live rechecking has since confirmed that the receipt is recognized, the
+  correct “继续沟通” control is clicked, and the page enters chat. The remaining
+  failure is therefore not receipt classification: full-page navigation can
+  destroy the content-script response channel before its eventual Promise
+  result reaches the service worker, leaving the pre-dispatch unknown result in
+  effect.
 
 ## Requirements
 
@@ -40,6 +46,9 @@ limits.
    unrelated text field.
 7. Keep automated verification local: sanitized DOM fixtures/stubs only, with no
    request or automated action against real BOSS.
+8. Once a qualifying receipt is confirmed, return `沟通成功` through the content
+   script response channel before clicking a control that may navigate. The
+   later best-effort result must not send a second response or replace success.
 
 ## Acceptance Criteria
 
@@ -58,6 +67,11 @@ limits.
       build pass.
 - [ ] The rebuilt extension behavior is manually rechecked after Chrome reload;
       the verification batch no longer ends as `已完成有异常` for this receipt.
+- [ ] A content-script regression models the response channel becoming unusable
+      after “继续沟通” and proves that `沟通成功` is returned before navigation.
+- [ ] The response callback is invoked at most once after a successful response;
+      if the first synchronous response attempt throws, confirmed success is not
+      downgraded and the final result can retry the response.
 
 ## Out of Scope
 

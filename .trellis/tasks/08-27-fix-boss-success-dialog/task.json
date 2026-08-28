@@ -5,7 +5,7 @@
   "description": "Recognize the live BOSS success receipt instead of recording an unknown contact result",
   "status": "in_progress",
   "dev_type": "bugfix",
-  "scope": "src/extension/boss-dom.ts and focused extension tests",
+  "scope": "BOSS receipt handling, content-script response timing, and focused extension tests",
   "package": "extension",
   "priority": "P2",
   "creator": "FallestRain",
@@ -23,6 +23,8 @@
   "relatedFiles": [
     "src/extension/boss-dom.ts",
     "tests/extension/boss-dom.test.ts",
+    "src/extension/content-script.ts",
+    "tests/extension/content-script.test.ts",
     "src/extension/protocol.ts",
     "docs/adr/0014-accept-platform-contact-success-receipt.md"
   ],
