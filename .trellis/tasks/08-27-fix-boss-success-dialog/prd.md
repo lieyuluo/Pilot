@@ -89,3 +89,25 @@ on a captured live DOM. It will model the remaining high-probability structural
 gap—exact-text actions rendered as non-`button`/`a` elements—while retaining
 strict receipt evidence and requiring a manual Chrome reload/recheck for final
 live confirmation.
+
+## Cross-Document Continuation Follow-up
+
+A second live recheck confirmed that the early response fix works: the
+verification batch now ends as `已完成`. It also proved that full-page navigation
+destroys the old content script before the configured opening template can be
+appended. The new chat document currently receives no continuation command.
+
+Additional requirements and acceptance criteria:
+
+- Persist one command/connection/tab/deadline-bound continuation in
+  `chrome.storage.session` after a strict receipt, then resume it only when the
+  same bound tab's newly loaded BOSS chat document is ready.
+- The resumed action is composer-only and must never repeat the contact click
+  or write into a search/unrelated input.
+- Persist success before waiting; continuation failure cannot downgrade it.
+- Clear transient state on completion, terminal inability, disconnect,
+  tab/connection change, deadline, or command replacement.
+- A worker restart between confirmation and `page_loaded` must still append the
+  template at most once.
+- The one-contact `已达到批次上限` result is expected for a verification batch.
+  Do not change quota behavior or add browser-history navigation.

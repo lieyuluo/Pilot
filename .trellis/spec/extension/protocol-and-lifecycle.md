@@ -48,6 +48,11 @@ Reference: `src/extension/protocol.ts`, `parseClientMessage` in
 - Once `sendOpeningFromDocument` reports `irreversibleStarted`, timeout,
   disconnect, emergency stop, or unprovable completion becomes `结果未知`; never
   rerun the send command.
+- A strict success receipt may create one transient, session-storage template
+  continuation. Persist the success result first; bind continuation to the same
+  command, connection, tab, source URL, and deadline; and resume only from the
+  newly loaded BOSS chat content script. This is not a second send command and
+  must never repeat the irreversible contact click.
 
 Tests: `tests/extension/bridge.test.ts`,
 `tests/extension/service-worker.test.ts`, and `tests/server/app.test.ts`.

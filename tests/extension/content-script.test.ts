@@ -7,6 +7,73 @@ afterEach(() => {
 });
 
 describe("Chrome extension content script", () => {
+  it("新聊天文档加载后执行仅追加模板的续作命令", async () => {
+    const window = new Window({
+      url: "https://www.zhipin.com/web/geek/chat",
+    });
+    window.document.write(`
+      <main class="chat-page">
+        <section class="message-list">
+          <p class="item-myself">平台默认招呼</p>
+        </section>
+        <textarea id="message" placeholder="发送消息"></textarea>
+        <button id="send">发送</button>
+      </main>
+    `);
+    let runtimeListener:
+      | ((
+          message: unknown,
+          sender: unknown,
+          respond: (value: unknown) => void,
+        ) => boolean)
+      | undefined;
+    const runtime = {
+      onMessage: {
+        addListener: vi.fn((listener) => {
+          runtimeListener = listener;
+        }),
+      },
+      sendMessage: vi.fn(async () => undefined),
+    };
+    window.document.querySelector("#send")!.addEventListener("click", () => {
+      const item = window.document.createElement("p");
+      item.className = "item-myself";
+      item.textContent = (
+        window.document.querySelector(
+          "#message",
+        ) as unknown as HTMLTextAreaElement
+      ).value;
+      window.document.querySelector(".message-list")!.append(item);
+    });
+    vi.stubGlobal("document", window.document);
+    vi.stubGlobal("location", window.location);
+    vi.stubGlobal("chrome", { runtime });
+
+    await import("../../src/extension/content-script.ts");
+
+    const outcome = await new Promise<Record<string, unknown>>((resolve) => {
+      const keptOpen = runtimeListener?.(
+        {
+          type: "resume_opening_template",
+          commandId: "navigation-command-1",
+          message: "您好，想进一步沟通。",
+          deadline: new Date(Date.now() + 1_000).toISOString(),
+        },
+        {},
+        (value) => resolve(value as Record<string, unknown>),
+      );
+      expect(keptOpen).toBe(true);
+    });
+
+    expect(outcome).toEqual({ completed: true });
+    expect(
+      [...window.document.querySelectorAll(".item-myself")].map(
+        (item) => item.textContent,
+      ),
+    ).toEqual(["平台默认招呼", "您好，想进一步沟通。"]);
+    window.close();
+  });
+
   it("成功回执触发页面跳转前先返回不可降级的沟通成功", async () => {
     const window = new Window({
       url: "https://www.zhipin.com/job_detail/abc123.html",
@@ -73,7 +140,11 @@ describe("Chrome extension content script", () => {
     let responseAttempts = 0;
     const outcome = await new Promise<Record<string, unknown>>((resolve) => {
       const keptOpen = runtimeListener?.(
-        { type: "send_opening", message: "您好，想进一步沟通。" },
+        {
+          type: "send_opening",
+          commandId: "navigation-command-1",
+          message: "您好，想进一步沟通。",
+        },
         {},
         (value) => {
           responseAttempts += 1;
@@ -97,8 +168,13 @@ describe("Chrome extension content script", () => {
       confirmation: "boss-success-dialog",
       irreversibleStarted: true,
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(responseAttempts).toBe(1);
+    await vi.waitFor(() => {
+      expect(runtime.sendMessage).toHaveBeenCalledWith({
+        type: "opening_template_continuation_complete",
+        commandId: "navigation-command-1",
+      });
+    });
     window.close();
   });
 
@@ -144,7 +220,11 @@ describe("Chrome extension content script", () => {
     let responseAttempts = 0;
     const outcome = await new Promise<Record<string, unknown>>((resolve) => {
       const keptOpen = runtimeListener?.(
-        { type: "send_opening", message: "您好，想进一步沟通。" },
+        {
+          type: "send_opening",
+          commandId: "retry-command-1",
+          message: "您好，想进一步沟通。",
+        },
         {},
         (value) => {
           responseAttempts += 1;

@@ -44,6 +44,8 @@ Preserve the evidence order in `sendOpeningFromDocument`:
    control. A delivered response is sent once; a synchronous response exception
    may retry with the same confirmed success when the best-effort work settles.
 8. If the result cannot be proved after the click, return `结果未知`.
+9. When a strict receipt navigates to a new BOSS chat document, resume only the
+   template append in that document. Never repeat the contact click.
 
 The success dialog must contain the exact success title within a dialog-like
 container plus the known continuation/settings evidence. Similar page-body text
@@ -70,6 +72,117 @@ Required tests must cover native and non-semantic actions, a page-body/article
 false positive, a non-semantic dialog-like container without a known action,
 the single `留在此页` compatibility path, an exception after success receipt,
 and content-script response-channel loss caused by continuation navigation.
+
+### Cross-document continuation
+
+The service worker owns a single transient continuation in
+`chrome.storage.session`. It is bound to the original command, connection,
+tab, source URL, and deadline, and may contain the opening template only for
+that live browser session. Persist the confirmed command result before waiting
+for continuation. Resume only after the same bound tab reports a newly loaded
+BOSS chat URL, then run a composer-only helper that retains the search-input
+exclusions above. Clear the state on success, terminal inability, disconnect,
+tab/connection change, deadline, or command replacement.
+
+A same-document append reports completion to the service worker. A full-page
+navigation instead relies on the new content script's `page_loaded` signal.
+Neither path changes or downgrades the already-confirmed communication result.
+
+## Scenario: Resume a template in a replacement chat document
+
+### 1. Scope / Trigger
+
+Use this contract only after a strict `boss-success-dialog` result has been
+persisted and “继续沟通” may replace the source document. The continuation is an
+internal service-worker/content-script operation, not a second platform contact
+command.
+
+### 2. Transient state and signatures
+
+The single `chrome.storage.session` record contains only `state`
+(`pending`/`dispatching`), command ID, connection ID, tab ID, source URL,
+deadline, and the opening-template plaintext. The internal content request is:
+
+```typescript
+{
+  type: "resume_opening_template";
+  commandId: string;
+  message: string;
+  deadline: string;
+}
+```
+
+No field crosses the extension/server wire, so this does not change the shared
+protocol or BOSS adapter version.
+
+### 3. Contracts
+
+- Cache the confirmed command result before persisting or waiting for the
+  continuation. Never retry the original contact click.
+- On command replay after worker restart, compare every stored binding with the
+  replayed send command and inspect `chrome.tabs.get`; recovery must not depend
+  on receiving a second `page_loaded` after `page_bound`.
+- Resume only in the same bound tab and connection, before the same deadline,
+  when both the content-script signal and current tab identify a BOSS chat URL.
+- Persist `dispatching` before the composer-only request. Concurrent page
+  signals share one in-memory claim; a restarted worker clears a recovered
+  `dispatching` record instead of risking a second send.
+- Do not release the outbound command result until same-document completion,
+  resumed completion/failure, lifecycle cleanup, or deadline cleanup resolves
+  the waiter.
+- Clear on terminal completion/failure, expiry, disconnect/disarm/emergency
+  stop, connection/tab/command replacement, corrupt storage, or a non-chat BOSS
+  destination. Cleanup failure is recorded in extension state and must not
+  become an unhandled rejection.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+| --- | --- |
+| Same-document template append completes | Clear the matching continuation and release the waiting result once. |
+| New chat page loads before `page_bound` after restart | Cached command replay inspects the current tab and resumes without another page event. |
+| Duplicate `page_loaded` / visibility events race | Dispatch the composer-only request at most once and keep the command result waiting. |
+| Stored binding, deadline, or source URL is invalid | Remove the transient record without writing to the page. |
+| Current destination is the source page | Keep waiting; do not write into its fields. |
+| Current destination is not a BOSS chat page | Clear terminally; never probe or write an unrelated input. |
+| Resume throws or returns incomplete | Preserve cached `沟通成功`, clear transient state, and release the command. |
+| Deadline expires before composer or send click | Do not write/click; clear and release. |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**: the old document disappears, the worker restarts, a chat content
+  script has already loaded, and replay resumes the template once from the
+  current bound tab.
+- **Base**: the original document appends the template and sends the matching
+  completion signal; no cross-document request is made.
+- **Bad**: replay repeats `send_opening`, trusts only a stale URL string, writes
+  into a search input, releases the next command while resume is in flight, or
+  retries a recovered `dispatching` record.
+
+### 6. Tests Required
+
+- Service-worker regression: persist strict success, restart the module, deliver
+  `page_loaded` before binding, replay the cached command, and prove one resumed
+  template plus delayed command completion.
+- Race regression: keep resume in flight while delivering a duplicate page
+  signal; assert one dispatch and no early command result.
+- DOM/content-script tests: composer-only success, search-input rejection,
+  expired-before-write rejection, and no contact-control click.
+- Corrupt-session regression: invalid source/deadline is removed without a
+  resumed request.
+
+### 7. Wrong vs Correct
+
+```typescript
+// Wrong: best-effort template work dies with the document that clicked continue.
+void continueInCurrentDocument().then(appendOpeningTemplate);
+
+// Correct: cache success, claim one transient continuation, then resume only
+// the composer step from the same command/tab in the replacement chat document.
+await cacheConfirmedResult(commandId);
+await persistSessionContinuation({ state: "pending", commandId, tabId });
+await waitForComposerOnlyContinuation(commandId);
+```
 
 ## Scenario: Return a success receipt before continuation navigation
 

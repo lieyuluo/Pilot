@@ -67,3 +67,20 @@ before clicking the continuation control, then suppresses the later duplicate
 completion. A response attempt is considered delivered only after its callback
 returns, allowing a synchronous callback exception to retry without changing
 the confirmed domain result.
+
+## Confirmed Cross-Document Continuation Gap
+
+The next supervised verification proved the response-ordering fix worked: the
+batch ended normally after one successful contact. It also isolated a second
+gap: full-page “继续沟通” navigation destroyed the document that owned the
+remaining composer/template work. The worker had already completed the command
+and retained no continuation for the new content script.
+
+The deterministic service-worker regression reproduces this sequence,
+including a worker module restart before the new chat document's `page_loaded`.
+Before source changes it failed twice with an empty resumed-template list. The
+selected correction stores one deadline-bound continuation in
+`chrome.storage.session`, resumes a composer-only operation in the same bound
+tab/BOSS chat page, and clears it after the first terminal attempt. The
+verification batch's one-contact completion is expected and needs no browser
+history action.

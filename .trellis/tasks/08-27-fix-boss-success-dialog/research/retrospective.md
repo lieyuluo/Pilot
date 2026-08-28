@@ -1,14 +1,15 @@
-# Bug Analysis: BOSS success receipt was downgraded to unknown
+# Bug Analysis: BOSS receipt navigation lost result and template continuation
 
 ## 1. Root Cause Category
 
 - **Category**: B/D/E — cross-layer contract, integration-test gap, and an
   implicit document-lifecycle assumption.
-- **Specific cause**: the DOM adapter correctly recognized the platform receipt,
-  but the content script waited for the complete “continue to chat and append
-  template” Promise before returning it. A full-page navigation destroyed the
-  old document's Chrome response channel first, so the service worker retained
-  its durable `结果未知` placeholder.
+- **Specific cause**: the implementation treated one document-local Promise as
+  both the domain result and the owner of post-receipt template work. Full-page
+  “继续沟通” navigation first destroyed the Chrome response channel, then—after
+  response ordering was fixed—still destroyed the old content script before it
+  could append the configured template. The service worker had no command-bound
+  continuation for the replacement chat document.
 
 ## 2. Why Earlier Fixes Failed
 
@@ -24,6 +25,13 @@
 4. The corrected DOM-level tests proved receipt recognition and monotonic return
    values, but stopped below the content-script/service-worker boundary. They did
    not prove that the value crossed Chrome's response channel before navigation.
+5. Returning success before the navigation repaired the batch result, but left
+   best-effort template append in the same disposable document. The next live run
+   correctly ended as `已完成` while revealing that the template never reached the
+   new chat document.
+6. The first cross-document implementation covered the happy path but needed
+   final-review hardening for early `page_loaded`, duplicate signals, waiter
+   cleanup, corrupt session state, and expiry during DOM discovery.
 
 ## 3. Prevention Mechanisms
 
@@ -34,6 +42,9 @@
 | P0       | Result monotonicity | After a platform success receipt, later append/send exceptions cannot downgrade the result.                 | DONE   |
 | P0       | Response ordering   | Return strict receipt success through the content-script channel before clicking a navigation-capable action. | DONE   |
 | P0       | Integration test    | Model response-channel loss after the continuation click and assert early, exactly-once success delivery.    | DONE   |
+| P0       | Lifecycle ownership | Persist one session-only, command-bound continuation and resume composer-only work in the replacement chat document. | DONE   |
+| P0       | At-most-once claim  | Persist `pending`/`dispatching`, bind every field, and never retry a recovered dispatching record.            | DONE   |
+| P0       | Restart/race tests  | Cover early page load, cached replay, duplicate signals, expiry, corrupt state, and waiter cleanup.           | DONE   |
 | P1       | Negative tests      | Cover ordinary article prose and dialog-like containers without a known action.                             | DONE   |
 | P1       | Live acceptance     | Reload the built extension and run one supervised BOSS batch without DevTools.                              | TODO   |
 
@@ -41,13 +52,14 @@
 
 - **Similar issues**: any extension selector that assumes semantic HTML for
   third-party controls can fail when the platform uses clickable wrappers; any
-  content-script command that navigates before responding can also lose a
-  conclusive result.
+  content-script command that navigates can lose both its response and unfinished
+  page work unless lifecycle ownership moves to the service worker.
 - **Design improvement**: keep action discovery centralized and evidence-bound,
-  and treat domain completion plus IPC delivery as separate completion gates.
+  and treat domain completion, IPC delivery, and cross-document best-effort work
+  as three separate completion gates.
 - **Process improvement**: selector fixes need positive/negative DOM fixtures;
-  navigation-capable command fixes also need a content-script integration test
-  that asserts response ordering across the document lifecycle.
+  navigation-capable command fixes also need service-worker/content-script tests
+  covering document replacement, worker restart, duplicate events, and cleanup.
 
 ## 5. Knowledge Capture
 
@@ -55,14 +67,17 @@
       `.trellis/spec/extension/dom-automation.md`.
 - [x] Added the navigation-before-response contract, error matrix, and required
       content-script integration assertions to the extension spec.
+- [x] Added the session continuation state machine, validation/error matrix,
+      good/base/bad cases, and wrong/correct implementation example.
 - [x] Added focused positive and negative regression tests.
 - [ ] Complete the supervised live acceptance check after reloading
       `dist/extension`.
 
 ## Confidence
 
-Local confidence is high because the content-script regression reproduces the
-reported sequence—receipt recognized, continuation clicked, late response lost—
-and proves success is now delivered first and only once. Live confidence remains
-moderate until the supervised check, because opening DevTools closes the BOSS
-page and the production navigation cannot be captured directly.
+Local confidence is high because the integration regression reproduces the full
+reported sequence—strict receipt, old-document loss, worker restart, early new
+page signal, cached replay, and exactly one composer-only append—and all race and
+negative cases pass. Live confidence remains moderate until the supervised check,
+because opening DevTools closes the BOSS page and the production navigation
+cannot be captured directly.

@@ -73,3 +73,16 @@ extension ready for this manual confirmation.
   later best-effort result, while a synchronous callback exception still allows
   the final confirmed-success result to retry.
 - Re-run focused content-script/DOM tests and the full extension quality gate.
+
+## 8. Cross-Document Template Continuation Follow-up
+
+- Reproduce strict success followed by old-document destruction, worker
+  restart, new chat `page_loaded`, and missing template at the
+  service-worker/content-script seam.
+- Persist one transient continuation in `chrome.storage.session`, bound to the
+  original command, connection, tab, source page, and deadline.
+- Add a composer-only content-script command and never repeat the contact click.
+- Persist success before waiting, but delay the outbound command result until
+  continuation is terminal so the next candidate cannot navigate away first.
+- Clear continuation state on all terminal/lifecycle boundaries and cover
+  exactly-once append plus search-input rejection.

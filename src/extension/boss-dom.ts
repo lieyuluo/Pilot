@@ -122,6 +122,76 @@ export interface DomSendOpeningResult {
   error?: string;
 }
 
+export interface DomAppendOpeningResult {
+  completed: boolean;
+  error?: string;
+}
+
+export async function appendOpeningTemplateFromDocument(
+  document: Document,
+  message: string,
+  timeoutMs = 5_000,
+): Promise<DomAppendOpeningResult> {
+  const existing = outgoingMessages(document);
+  if (
+    existing.some(
+      (text) => normalizeMessage(text) === normalizeMessage(message),
+    )
+  ) {
+    return { completed: true };
+  }
+  if (timeoutMs <= 0) {
+    return { completed: false, error: "开场模板续作已经过期" };
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  const composer = await waitForOptional(
+    () => findChatComposer(document),
+    remainingTime(),
+  );
+  if (composer === undefined) {
+    return { completed: false, error: "聊天输入框暂不可用" };
+  }
+  if (Date.now() >= deadline) {
+    return { completed: false, error: "开场模板续作已经过期" };
+  }
+
+  setComposerValue(composer, message);
+  if (normalizeMessage(composerText(composer)) !== normalizeMessage(message)) {
+    return { completed: false, error: "消息输入框未接受完整开场消息" };
+  }
+
+  const sendButton = await waitForOptional(
+    () => findSendButton(document, composer),
+    Math.min(1_500, remainingTime()),
+  );
+  if (sendButton === undefined) {
+    return { completed: false, error: "没有找到可用的聊天发送按钮" };
+  }
+  if (Date.now() >= deadline) {
+    return { completed: false, error: "开场模板续作已经过期" };
+  }
+
+  sendButton.click();
+  const created = await waitForOptional(() => {
+    const messages = outgoingMessages(document).slice(existing.length);
+    return messages.length > 0 ? messages : undefined;
+  }, remainingTime());
+  if (created === undefined) {
+    return { completed: false, error: "点击发送后未能确认新增的本人消息" };
+  }
+  if (
+    created.some((text) => normalizeMessage(text) === normalizeMessage(message))
+  ) {
+    return { completed: true };
+  }
+  return { completed: false, error: "新增本人消息与开场消息不一致" };
+
+  function remainingTime(): number {
+    return Math.max(1, deadline - Date.now());
+  }
+}
+
 export async function sendOpeningFromDocument(
   document: Document,
   message: string,

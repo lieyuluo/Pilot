@@ -88,3 +88,31 @@ control-discovery hunk and keep the task in diagnosis.
 Final live validation requires rebuilding `dist/extension`, reloading the
 unpacked extension in Chrome, refreshing the BOSS page, and running one normal
 verification batch under the project's existing human-supervised rules.
+
+## Cross-Document Template Continuation
+
+After receiving `boss-success-dialog`, the service worker persists the confirmed
+command result and one transient continuation in `chrome.storage.session`. The
+continuation contains only the command/connection/tab binding, source URL,
+deadline, and opening template needed for the current command; it does not
+survive a browser restart or enter the durable command-result ledger.
+
+The new content script announces `page_loaded`. The worker resumes only when
+the same connection and bound tab now point to a BOSS chat URL and the deadline
+is valid. The resumed operation is composer-only: it never looks for or clicks
+a contact control and retains the existing search-input filter. A same-document
+append sends an explicit completion signal instead.
+
+The outbound command result waits until this best-effort continuation reaches a
+terminal point, preventing the next batch command from navigating away first.
+Because success was persisted before the wait, lifecycle loss cannot downgrade
+it. Verification batches still finish after one contact; no history/back action
+is added.
+
+The transient record moves from `pending` to `dispatching` before the resumed
+content-script request. Duplicate page events share one in-memory claim; after a
+worker restart, a recovered `dispatching` record is cleared rather than retried.
+Cached command replay validates every stored binding and reads the current tab,
+so a `page_loaded` event that arrived before `page_bound` is not required a
+second time. The command result remains withheld while the composer-only request
+is in flight and is released by terminal cleanup or the original deadline.

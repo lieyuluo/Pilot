@@ -5,6 +5,7 @@ import { Window } from "happy-dom";
 import { describe, expect, it } from "vitest";
 
 import {
+  appendOpeningTemplateFromDocument,
   inspectBossPage,
   readCandidates,
   readContactState,
@@ -542,6 +543,92 @@ describe("Boss extension DOM reader", () => {
     await expect(
       sendOpeningFromDocument(asBrowserDocument(window), "开场模板", 50),
     ).resolves.toMatchObject({ result: "结果未知" });
+  });
+
+  it("在导航后的聊天文档中仅追加并确认开场模板", async () => {
+    const window = htmlWindow(`
+      <main class="chat-page">
+        <section class="message-list">
+          <p class="item-myself">平台默认招呼</p>
+        </section>
+        <textarea id="composer" placeholder="发送消息"></textarea>
+        <button id="send">发送</button>
+      </main>
+    `);
+    const { document } = window;
+    document.querySelector("#send")!.addEventListener("click", () => {
+      const item = document.createElement("p");
+      item.className = "item-myself";
+      item.textContent = (
+        document.querySelector("#composer") as unknown as HTMLTextAreaElement
+      ).value;
+      document.querySelector(".message-list")!.append(item);
+    });
+
+    await expect(
+      appendOpeningTemplateFromDocument(
+        asBrowserDocument(window),
+        "您好，想进一步沟通。",
+        100,
+      ),
+    ).resolves.toEqual({ completed: true });
+    expect(
+      [...document.querySelectorAll(".item-myself")].map(
+        (item) => item.textContent,
+      ),
+    ).toEqual(["平台默认招呼", "您好，想进一步沟通。"]);
+  });
+
+  it("跨文档续作不会把开场模板写入职位搜索框", async () => {
+    const window = htmlWindow(`
+      <main class="job-search-page">
+        <form role="search">
+          <input id="query" type="text" placeholder="搜索职位" />
+          <button>搜索</button>
+        </form>
+      </main>
+    `);
+    const input = window.document.querySelector(
+      "#query",
+    ) as unknown as HTMLInputElement;
+
+    await expect(
+      appendOpeningTemplateFromDocument(
+        asBrowserDocument(window),
+        "不得写入搜索框",
+        20,
+      ),
+    ).resolves.toEqual({ completed: false, error: "聊天输入框暂不可用" });
+    expect(input.value).toBe("");
+  });
+
+  it("跨文档续作过期后不会再写入或发送模板", async () => {
+    const window = htmlWindow(`
+      <main class="chat-page">
+        <textarea id="composer" placeholder="发送消息"></textarea>
+        <button id="send">发送</button>
+      </main>
+    `);
+    const composer = window.document.querySelector(
+      "#composer",
+    ) as unknown as HTMLTextAreaElement;
+    const send = window.document.querySelector(
+      "#send",
+    ) as unknown as HTMLElement;
+    let clicks = 0;
+    send.addEventListener("click", () => {
+      clicks += 1;
+    });
+
+    await expect(
+      appendOpeningTemplateFromDocument(
+        asBrowserDocument(window),
+        "不得发送的过期模板",
+        0,
+      ),
+    ).resolves.toEqual({ completed: false, error: "开场模板续作已经过期" });
+    expect(composer.value).toBe("");
+    expect(clicks).toBe(0);
   });
 });
 

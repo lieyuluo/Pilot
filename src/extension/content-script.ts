@@ -1,4 +1,5 @@
 import {
+  appendOpeningTemplateFromDocument,
   inspectBossPage,
   readCandidates,
   readContactState,
@@ -44,6 +45,7 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, respond) => {
   }
   if (message.type === "send_opening") {
     let responded = false;
+    let successReceiptObserved = false;
     // “继续沟通” may replace this document and close the response channel.
     // A conclusive receipt must therefore be returned before that click.
     const respondOnce = (result: DomSendOpeningResult) => {
@@ -54,12 +56,41 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, respond) => {
       });
       responded = true;
     };
+    const respondSuccessReceipt = (result: DomSendOpeningResult) => {
+      successReceiptObserved = true;
+      respondOnce(result);
+    };
     void sendOpeningFromDocument(
       document,
       message.message,
       undefined,
-      respondOnce,
-    ).then(respondOnce);
+      respondSuccessReceipt,
+    ).then((result) => {
+      respondOnce(result);
+      if (successReceiptObserved) {
+        notifyServiceWorker({
+          type: "opening_template_continuation_complete",
+          commandId: message.commandId,
+        });
+      }
+    });
+    return true;
+  }
+  if (message.type === "resume_opening_template") {
+    const deadline = Date.parse(message.deadline);
+    if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+      respond({ completed: false, error: "开场模板续作已经过期" });
+      return false;
+    }
+    const timeoutMs = deadline - Date.now();
+    void appendOpeningTemplateFromDocument(document, message.message, timeoutMs)
+      .then(respond)
+      .catch((error: unknown) => {
+        respond({
+          completed: false,
+          error: error instanceof Error ? error.message : "开场模板续作失败",
+        });
+      });
     return true;
   }
   return false;
@@ -96,7 +127,13 @@ function notifyServiceWorker(message: unknown): void {
 type ContentRequest =
   | { type: "inspect_page" | "read_candidates" | "read_contact_state" }
   | { type: "inspect_position"; candidate: CandidatePosition }
-  | { type: "send_opening"; message: string };
+  | { type: "send_opening"; commandId: string; message: string }
+  | {
+      type: "resume_opening_template";
+      commandId: string;
+      message: string;
+      deadline: string;
+    };
 
 type DomSendOpeningResult = Awaited<ReturnType<typeof sendOpeningFromDocument>>;
 
@@ -111,9 +148,20 @@ function isRequest(value: unknown): value is ContentRequest {
       "read_contact_state",
       "inspect_position",
       "send_opening",
+      "resume_opening_template",
     ].includes(String(value.type)) &&
     (String(value.type) !== "send_opening" ||
-      ("message" in value && typeof value.message === "string")) &&
+      ("commandId" in value &&
+        typeof value.commandId === "string" &&
+        "message" in value &&
+        typeof value.message === "string")) &&
+    (String(value.type) !== "resume_opening_template" ||
+      ("commandId" in value &&
+        typeof value.commandId === "string" &&
+        "message" in value &&
+        typeof value.message === "string" &&
+        "deadline" in value &&
+        typeof value.deadline === "string")) &&
     (String(value.type) !== "inspect_position" || "candidate" in value)
   );
 }

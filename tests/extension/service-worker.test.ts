@@ -11,6 +11,282 @@ afterEach(() => {
 });
 
 describe("Chrome extension service worker", () => {
+  it("成功回执导航到新文档后继续发送开场模板", async () => {
+    const sockets: FakeWebSocket[] = [];
+    vi.stubGlobal(
+      "WebSocket",
+      class extends FakeWebSocket {
+        static readonly CONNECTING = 0;
+        static readonly OPEN = 1;
+
+        constructor(url: string) {
+          super(url);
+          sockets.push(this);
+        }
+      },
+    );
+
+    let currentUrl = "https://www.zhipin.com/job_detail/abc123.html";
+    let runtimeListener:
+      | ((
+          message: unknown,
+          sender: { tab?: { id?: number } },
+          respond: (value: unknown) => void,
+        ) => boolean)
+      | undefined;
+    const storage = new Map<string, unknown>([
+      ["jobpilotInstanceId", "extension-instance-1"],
+    ]);
+    const resumedMessages: string[] = [];
+    let releaseResume: (() => void) | undefined;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    vi.stubGlobal("chrome", {
+      runtime: {
+        getManifest: () => ({ version: "0.1.0" }),
+        onStartup: { addListener: vi.fn() },
+        onInstalled: { addListener: vi.fn() },
+        onMessage: {
+          addListener: vi.fn((listener) => {
+            runtimeListener = listener;
+          }),
+        },
+      },
+      storage: {
+        session: {
+          async get(key: string) {
+            return { [key]: storage.get(key) };
+          },
+          async set(values: Record<string, unknown>) {
+            for (const [key, value] of Object.entries(values)) {
+              storage.set(key, value);
+            }
+          },
+          async remove(key: string) {
+            storage.delete(key);
+          },
+        },
+        local: {
+          async get(key: string) {
+            return { [key]: storage.get(key) };
+          },
+          async set(values: Record<string, unknown>) {
+            for (const [key, value] of Object.entries(values)) {
+              storage.set(key, value);
+            }
+          },
+          async remove(key: string) {
+            storage.delete(key);
+          },
+        },
+      },
+      tabs: {
+        async get(tabId: number) {
+          return {
+            id: tabId,
+            url: currentUrl,
+            active: true,
+            status: "complete",
+          };
+        },
+        async sendMessage(
+          _tabId: number,
+          message: { type: string; message?: string },
+        ) {
+          if (message.type === "send_opening") {
+            return {
+              inspection: {
+                kind: "detail",
+                url: "https://www.zhipin.com/job_detail/abc123.html",
+                candidatesRecognized: 0,
+              },
+              result: "沟通成功",
+              irreversibleStarted: true,
+              baselineOutgoingCount: 0,
+              finalOutgoingCount: 1,
+              confirmation: "boss-success-dialog",
+            };
+          }
+          if (message.type === "resume_opening_template") {
+            resumedMessages.push(message.message ?? "");
+            await resumeGate;
+            return { completed: true };
+          }
+          if (message.type === "inspect_page") {
+            return {
+              kind: "unsupported",
+              url: currentUrl,
+              candidatesRecognized: 0,
+            };
+          }
+          throw new Error(`unexpected tab message: ${message.type}`);
+        },
+        query: vi.fn(),
+        onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
+      },
+    });
+
+    await import("../../src/extension/service-worker.ts");
+    const socket = sockets[0]!;
+    socket.receive({
+      type: "challenge",
+      protocolVersion: EXTENSION_PROTOCOL_VERSION,
+      nonce: "challenge-nonce",
+    });
+    await vi.waitFor(() => expect(socket.last("hello")).toBeDefined());
+    socket.receive({ type: "ready", connectionId: "connection-1" });
+    socket.receive({
+      type: "page_bound",
+      connectionId: "connection-1",
+      tabId: 42,
+    });
+    const command = {
+      type: "send-opening",
+      commandId: "navigation-command-1",
+      operationId: "operation-1",
+      connectionId: "connection-1",
+      expectedTabId: 42,
+      expectedUrl: "https://www.zhipin.com/job_detail/abc123.html",
+      deadline: new Date(Date.now() + 10_000).toISOString(),
+      candidate: {
+        id: "abc123",
+        url: "https://www.zhipin.com/job_detail/abc123.html",
+        title: "Agent Harness 工程师",
+        company: "腾讯",
+      },
+      message: "您好，想进一步沟通。",
+      messageHash: "a".repeat(64),
+    } as const;
+    socket.receive({ type: "command", command });
+
+    await vi.waitFor(() => {
+      const stored = storage.get("jobpilotCommandResultsV2") as
+        Record<string, { result: unknown }> | undefined;
+      expect(stored?.[command.commandId]?.result).toMatchObject({
+        commandId: command.commandId,
+        outcome: "ok",
+        data: {
+          result: "沟通成功",
+          evidence: { confirmation: "boss-success-dialog" },
+        },
+      });
+    });
+
+    currentUrl = "https://www.zhipin.com/web/geek/chat";
+    vi.resetModules();
+    await import("../../src/extension/service-worker.ts");
+    const restartedSocket = sockets[1]!;
+    runtimeListener?.(
+      {
+        type: "page_loaded",
+        inspection: {
+          kind: "unsupported",
+          url: currentUrl,
+          candidatesRecognized: 0,
+        },
+        visible: true,
+      },
+      { tab: { id: 42 } },
+      vi.fn(),
+    );
+    restartedSocket.receive({
+      type: "challenge",
+      protocolVersion: EXTENSION_PROTOCOL_VERSION,
+      nonce: "restarted-challenge-nonce",
+    });
+    await vi.waitFor(() => expect(restartedSocket.last("hello")).toBeDefined());
+    restartedSocket.receive({ type: "ready", connectionId: "connection-1" });
+    restartedSocket.receive({
+      type: "page_bound",
+      connectionId: "connection-1",
+      tabId: 42,
+    });
+    restartedSocket.receive({ type: "command", command });
+
+    await vi.waitFor(() => {
+      expect(resumedMessages).toEqual(["您好，想进一步沟通。"]);
+    });
+    runtimeListener?.(
+      {
+        type: "page_loaded",
+        inspection: {
+          kind: "unsupported",
+          url: currentUrl,
+          candidatesRecognized: 0,
+        },
+        visible: true,
+      },
+      { tab: { id: 42 } },
+      vi.fn(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(restartedSocket.last("command_result")).toBeUndefined();
+    releaseResume?.();
+    expect(resumedMessages).toEqual(["您好，想进一步沟通。"]);
+    await vi.waitFor(() => {
+      expect(restartedSocket.last("command_result")).toMatchObject({
+        commandId: command.commandId,
+        outcome: "ok",
+        data: { result: "沟通成功" },
+      });
+    });
+    expect(storage.has("jobpilotPendingOpeningTemplateV1")).toBe(false);
+
+    storage.set("jobpilotPendingOpeningTemplateV1", {
+      state: "dispatching",
+      commandId: command.commandId,
+      connectionId: command.connectionId,
+      tabId: command.expectedTabId,
+      sourceUrl: command.expectedUrl,
+      deadline: command.deadline,
+      message: command.message,
+    });
+    runtimeListener?.(
+      {
+        type: "page_loaded",
+        inspection: {
+          kind: "unsupported",
+          url: currentUrl,
+          candidatesRecognized: 0,
+        },
+        visible: true,
+      },
+      { tab: { id: 42 } },
+      vi.fn(),
+    );
+    await vi.waitFor(() => {
+      expect(storage.has("jobpilotPendingOpeningTemplateV1")).toBe(false);
+    });
+    expect(resumedMessages).toHaveLength(1);
+
+    storage.set("jobpilotPendingOpeningTemplateV1", {
+      state: "pending",
+      commandId: command.commandId,
+      connectionId: command.connectionId,
+      tabId: command.expectedTabId,
+      sourceUrl: "https://example.com/not-boss",
+      deadline: "not-a-deadline",
+      message: command.message,
+    });
+    runtimeListener?.(
+      {
+        type: "page_loaded",
+        inspection: {
+          kind: "unsupported",
+          url: currentUrl,
+          candidatesRecognized: 0,
+        },
+        visible: true,
+      },
+      { tab: { id: 42 } },
+      vi.fn(),
+    );
+    await vi.waitFor(() => {
+      expect(storage.has("jobpilotPendingOpeningTemplateV1")).toBe(false);
+    });
+  });
+
   it("等待已完成导航的搜索页渲染出职位列表", async () => {
     const sockets: FakeWebSocket[] = [];
     vi.stubGlobal(
@@ -39,6 +315,19 @@ describe("Chrome extension service worker", () => {
         onMessage: { addListener: vi.fn() },
       },
       storage: {
+        session: {
+          async get(key: string) {
+            return { [key]: storage.get(key) };
+          },
+          async set(values: Record<string, unknown>) {
+            for (const [key, value] of Object.entries(values)) {
+              storage.set(key, value);
+            }
+          },
+          async remove(key: string) {
+            storage.delete(key);
+          },
+        },
         local: {
           async get(key: string) {
             return { [key]: storage.get(key) };
@@ -203,6 +492,18 @@ describe("Chrome extension service worker", () => {
         },
       },
       storage: {
+        session: {
+          async get(key: string) {
+            return { [key]: storage.get(key) };
+          },
+          async set(values: Record<string, unknown>) {
+            for (const [key, value] of Object.entries(values))
+              storage.set(key, value);
+          },
+          async remove(key: string) {
+            storage.delete(key);
+          },
+        },
         local: {
           async get(key: string) {
             return { [key]: storage.get(key) };
@@ -293,6 +594,18 @@ describe("Chrome extension service worker", () => {
         onMessage: { addListener: vi.fn() },
       },
       storage: {
+        session: {
+          async get(key: string) {
+            return { [key]: storage.get(key) };
+          },
+          async set(values: Record<string, unknown>) {
+            for (const [key, value] of Object.entries(values))
+              storage.set(key, value);
+          },
+          async remove(key: string) {
+            storage.delete(key);
+          },
+        },
         local: {
           async get(key: string) {
             return { [key]: storage.get(key) };
@@ -328,7 +641,7 @@ describe("Chrome extension service worker", () => {
             irreversibleStarted: true,
             baselineOutgoingCount: 0,
             finalOutgoingCount: 1,
-            confirmation: "boss-success-dialog",
+            confirmation: "matched-message",
           };
         },
         query: vi.fn(),
@@ -363,7 +676,7 @@ describe("Chrome extension service worker", () => {
         outcome: "ok",
         data: {
           result: "沟通成功",
-          evidence: { confirmation: "boss-success-dialog" },
+          evidence: { confirmation: "matched-message" },
           takeover: {
             kind: "verification",
             reason: "Boss 页面出现验证或风控提示",
@@ -377,7 +690,7 @@ describe("Chrome extension service worker", () => {
           data: { evidence: Record<string, unknown> };
         }
       ).data.evidence,
-    ).not.toHaveProperty("matchedMessageHash");
+    ).toHaveProperty("matchedMessageHash", "a".repeat(64));
     expect(sends).toBe(1);
 
     vi.resetModules();
