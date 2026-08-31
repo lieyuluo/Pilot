@@ -32,6 +32,11 @@
 6. The first cross-document implementation covered the happy path but needed
    final-review hardening for early `page_loaded`, duplicate signals, waiter
    cleanup, corrupt session state, and expiry during DOM discovery.
+7. The hardened continuation still treated any text input under a `chat-*`
+   ancestor as a composer, so BOSS's contact-search field accepted the template
+   before send-button discovery failed. It also returned the early persisted
+   detail URL after the chat-page continuation, leaving the bridge's next
+   `expectedUrl` stale and producing repeated page-change failures.
 
 ## 3. Prevention Mechanisms
 
@@ -45,6 +50,8 @@
 | P0       | Lifecycle ownership | Persist one session-only, command-bound continuation and resume composer-only work in the replacement chat document. | DONE   |
 | P0       | At-most-once claim  | Persist `pending`/`dispatching`, bind every field, and never retry a recovered dispatching record.            | DONE   |
 | P0       | Restart/race tests  | Cover early page load, cached replay, duplicate signals, expiry, corrupt state, and waiter cleanup.           | DONE   |
+| P0       | Negative composer evidence | Reject search-labelled fields even inside a chat-page container, before mutating their value.          | DONE   |
+| P0       | Final URL contract  | Refresh and persist the bound tab URL after continuation terminal state, including cached replay.             | DONE   |
 | P1       | Negative tests      | Cover ordinary article prose and dialog-like containers without a known action.                             | DONE   |
 | P1       | Live acceptance     | Reload the built extension and run one supervised BOSS batch without DevTools.                              | TODO   |
 
@@ -53,7 +60,9 @@
 - **Similar issues**: any extension selector that assumes semantic HTML for
   third-party controls can fail when the platform uses clickable wrappers; any
   content-script command that navigates can lose both its response and unfinished
-  page work unless lifecycle ownership moves to the service worker.
+  page work unless lifecycle ownership moves to the service worker. A broad
+  positive ancestor such as `chat-page` can also swallow a stronger negative
+  signal on a descendant control unless rejection rules run first.
 - **Design improvement**: keep action discovery centralized and evidence-bound,
   and treat domain completion, IPC delivery, and cross-document best-effort work
   as three separate completion gates.
@@ -70,6 +79,9 @@
 - [x] Added the session continuation state machine, validation/error matrix,
       good/base/bad cases, and wrong/correct implementation example.
 - [x] Added focused positive and negative regression tests.
+- [x] Added the chat-shell contact-search rejection and post-continuation final
+      URL contract to `.trellis/spec/extension/dom-automation.md`.
+- [x] Added regressions for wrong-field mutation and stale cached `currentUrl`.
 - [ ] Complete the supervised live acceptance check after reloading
       `dist/extension`.
 

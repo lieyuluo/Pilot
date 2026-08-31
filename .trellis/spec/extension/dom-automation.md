@@ -73,6 +73,16 @@ false positive, a non-semantic dialog-like container without a known action,
 the single `留在此页` compatibility path, an exception after success receipt,
 and content-script response-channel loss caused by continuation navigation.
 
+### Composer safety
+
+Chat-page ancestry is only positive context for composer discovery; it must
+never override explicit search-field evidence. Reject `input[type="search"]`,
+`[role="searchbox"]`, fields inside `[role="search"]`, and fields whose
+`placeholder`, `aria-label`, or `data-placeholder` contains `搜索` or `查找`.
+This includes the contact-search field rendered inside BOSS's chat-page shell.
+The rejection must happen before assigning a value so a failed composer lookup
+cannot leave the opening template in an unrelated field.
+
 ### Cross-document continuation
 
 The service worker owns a single transient continuation in
@@ -130,6 +140,11 @@ protocol or BOSS adapter version.
 - Do not release the outbound command result until same-document completion,
   resumed completion/failure, lifecycle cleanup, or deadline cleanup resolves
   the waiter.
+- After the continuation reaches a terminal state, refresh `currentUrl` from
+  the bound tab before sending the final command result. If a worker restart
+  replays the early persisted success, refresh and re-persist that cached
+  result as well; otherwise the bridge retains the pre-navigation detail URL
+  and rejects subsequent commands as a changed page.
 - Clear on terminal completion/failure, expiry, disconnect/disarm/emergency
   stop, connection/tab/command replacement, corrupt storage, or a non-chat BOSS
   destination. Cleanup failure is recorded in extension state and must not
@@ -145,8 +160,10 @@ protocol or BOSS adapter version.
 | Stored binding, deadline, or source URL is invalid | Remove the transient record without writing to the page. |
 | Current destination is the source page | Keep waiting; do not write into its fields. |
 | Current destination is not a BOSS chat page | Clear terminally; never probe or write an unrelated input. |
+| Chat shell exposes a text field labelled `搜索` / `查找` | Treat it as non-composer evidence and leave its value unchanged. |
 | Resume throws or returns incomplete | Preserve cached `沟通成功`, clear transient state, and release the command. |
 | Deadline expires before composer or send click | Do not write/click; clear and release. |
+| Continuation finishes after full-page navigation | Return and cache the bound tab's chat URL, not the source detail URL. |
 
 ### 5. Good / Base / Bad Cases
 
@@ -167,7 +184,11 @@ protocol or BOSS adapter version.
 - Race regression: keep resume in flight while delivering a duplicate page
   signal; assert one dispatch and no early command result.
 - DOM/content-script tests: composer-only success, search-input rejection,
+  search-labelled input rejection inside the chat shell,
   expired-before-write rejection, and no contact-control click.
+- Final-result regression: after cross-document resume (including cached replay
+  after worker restart), assert `command_result.data.currentUrl` equals the
+  bound chat URL.
 - Corrupt-session regression: invalid source/deadline is removed without a
   resumed request.
 
@@ -178,10 +199,12 @@ protocol or BOSS adapter version.
 void continueInCurrentDocument().then(appendOpeningTemplate);
 
 // Correct: cache success, claim one transient continuation, then resume only
-// the composer step from the same command/tab in the replacement chat document.
+// the composer step from the same command/tab in the replacement chat document,
+// reject search-labelled fields, and refresh currentUrl before final delivery.
 await cacheConfirmedResult(commandId);
 await persistSessionContinuation({ state: "pending", commandId, tabId });
 await waitForComposerOnlyContinuation(commandId);
+const currentUrl = await readBoundTabUrl(tabId);
 ```
 
 ## Scenario: Return a success receipt before continuation navigation

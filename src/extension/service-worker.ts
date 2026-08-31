@@ -269,6 +269,7 @@ async function executeCommand(command: ExtensionCommand): Promise<void> {
       commandResults.get(command.commandId) ??
       (await getPersistedCommandResult(command.commandId));
     if (cached !== undefined) {
+      let replayResult = cached;
       const pending = await getPendingOpeningTemplate();
       if (pending?.commandId === command.commandId) {
         if (!isPendingOpeningTemplateBoundToCommand(pending, command)) {
@@ -285,8 +286,15 @@ async function executeCommand(command: ExtensionCommand): Promise<void> {
           void attemptPendingOpeningTemplateResume(pending.tabId, tab.url);
         }
         await continuation;
+        replayResult = await refreshCommandResultCurrentUrl(
+          cached,
+          pending.tabId,
+        );
+        if (replayResult !== cached) {
+          await cacheCommandResult(replayResult);
+        }
       }
-      send(cached);
+      send(replayResult);
       return;
     }
     if (new Date(command.deadline).getTime() <= Date.now()) {
@@ -562,7 +570,28 @@ async function sendOpening(
   } else {
     await clearPendingOpeningTemplate(command.commandId);
   }
-  return executionResult;
+  const currentUrl = await currentTabUrl(tabId, executionResult.currentUrl);
+  return currentUrl === executionResult.currentUrl
+    ? executionResult
+    : { ...executionResult, currentUrl };
+}
+
+async function refreshCommandResultCurrentUrl(
+  result: Extract<ExtensionToServerMessage, { type: "command_result" }>,
+  tabId: number,
+): Promise<Extract<ExtensionToServerMessage, { type: "command_result" }>> {
+  if (!isRecord(result.data) || typeof result.data.currentUrl !== "string") {
+    return result;
+  }
+  const currentUrl = await currentTabUrl(tabId, result.data.currentUrl);
+  return currentUrl === result.data.currentUrl
+    ? result
+    : { ...result, data: { ...result.data, currentUrl } };
+}
+
+async function currentTabUrl(tabId: number, fallback: string): Promise<string> {
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  return tab?.url ?? fallback;
 }
 
 function sendResult(

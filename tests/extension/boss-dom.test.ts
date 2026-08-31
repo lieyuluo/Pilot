@@ -602,6 +602,28 @@ describe("Boss extension DOM reader", () => {
     expect(input.value).toBe("");
   });
 
+  it("聊天页中的搜索联系人输入框不是聊天输入框", async () => {
+    const window = htmlWindow(`
+      <main class="chat-page">
+        <header class="contact-list">
+          <input id="contact-search" type="text" placeholder="搜索联系人" />
+        </header>
+      </main>
+    `);
+    const input = window.document.querySelector(
+      "#contact-search",
+    ) as unknown as HTMLInputElement;
+
+    await expect(
+      appendOpeningTemplateFromDocument(
+        asBrowserDocument(window),
+        "不得写入联系人搜索框",
+        20,
+      ),
+    ).resolves.toEqual({ completed: false, error: "聊天输入框暂不可用" });
+    expect(input.value).toBe("");
+  });
+
   it("跨文档续作过期后不会再写入或发送模板", async () => {
     const window = htmlWindow(`
       <main class="chat-page">

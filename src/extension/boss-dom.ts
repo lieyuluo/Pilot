@@ -555,21 +555,22 @@ function findChatComposer(document: Document): HTMLElement | undefined {
 
 function isChatComposer(element: HTMLElement): boolean {
   if (!isElementAvailable(element)) return false;
-  if (
-    element.matches('input[type="search"], [role="searchbox"]') ||
-    element.closest('[role="search"]') !== null
-  ) {
-    return false;
-  }
-  const chatContext = element.closest(
-    '[class*="chat"], [class*="message"], [class*="conversation"], [id*="chat"], [id*="message"], [id*="conversation"]',
-  );
   const inputHint = compactText(
     [
       element.getAttribute("placeholder") ?? "",
       element.getAttribute("aria-label") ?? "",
       element.getAttribute("data-placeholder") ?? "",
     ].join(" "),
+  );
+  if (
+    element.matches('input[type="search"], [role="searchbox"]') ||
+    element.closest('[role="search"]') !== null ||
+    /搜索|查找/.test(inputHint)
+  ) {
+    return false;
+  }
+  const chatContext = element.closest(
+    '[class*="chat"], [class*="message"], [class*="conversation"], [id*="chat"], [id*="message"], [id*="conversation"]',
   );
   return chatContext !== null || /消息|沟通|发送/.test(inputHint);
 }

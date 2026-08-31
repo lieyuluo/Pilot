@@ -228,7 +228,10 @@ describe("Chrome extension service worker", () => {
       expect(restartedSocket.last("command_result")).toMatchObject({
         commandId: command.commandId,
         outcome: "ok",
-        data: { result: "沟通成功" },
+        data: {
+          result: "沟通成功",
+          currentUrl: "https://www.zhipin.com/web/geek/chat",
+        },
       });
     });
     expect(storage.has("jobpilotPendingOpeningTemplateV1")).toBe(false);
