@@ -22,6 +22,7 @@ const SOCKET_URL = "ws://127.0.0.1:4317/extension";
 const STORAGE_INSTANCE_ID = "jobpilotInstanceId";
 const STORAGE_PAIRING_SECRET = "jobpilotPairingSecret";
 const STORAGE_COMMAND_RESULTS = "jobpilotCommandResultsV2";
+const STORAGE_PENDING_OPENING_TEMPLATE = "jobpilotPendingOpeningTemplateV1";
 const PAGE_STRUCTURE_TIMEOUT_MS = 10_000;
 const PAGE_STRUCTURE_POLL_MS = 250;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
@@ -34,6 +35,8 @@ let boundTabId: number | undefined;
 let commandRunning = false;
 let handshakeReady = false;
 let lastError: string | undefined;
+let completedTemplateCommandId: string | undefined;
+let activeTemplateCommandId: string | undefined;
 let preparation: PagePreparationStatus = {
   state: "idle",
   stage: "connecting",
@@ -43,6 +46,8 @@ const commandResults = new Map<
   string,
   Extract<ExtensionToServerMessage, { type: "command_result" }>
 >();
+const pendingTemplateWaiters = new Map<string, () => void>();
+const resumingTemplateCommands = new Set<string>();
 
 void connect();
 chrome.runtime.onStartup.addListener(() => void connect());
@@ -77,14 +82,28 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
     return false;
   }
   if (
+    message.type === "opening_template_continuation_complete" &&
+    senderTabId === boundTabId &&
+    activeTemplateCommandId !== undefined
+  ) {
+    const commandId = runtimeMessageCommandId(message);
+    if (commandId === activeTemplateCommandId) {
+      completedTemplateCommandId = commandId;
+      void settlePendingOpeningTemplate(commandId);
+    }
+    return false;
+  }
+  if (
     (message.type === "page_loaded" || message.type === "page_visibility") &&
     senderTabId === boundTabId
   ) {
     if (senderTabId !== undefined) {
       const visibility = (message as { visible?: unknown }).visible;
-      void reportPageState(
+      const loadedUrl = runtimeMessageUrl(message);
+      void handlePageSignal(
         senderTabId,
         typeof visibility === "boolean" ? visibility : undefined,
+        message.type === "page_loaded" ? loadedUrl : undefined,
       );
     }
   }
@@ -122,6 +141,9 @@ async function connect(): Promise<void> {
       connectionId = undefined;
       boundTabId = undefined;
       handshakeReady = false;
+      completedTemplateCommandId = undefined;
+      activeTemplateCommandId = undefined;
+      void settlePendingOpeningTemplate();
       if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
       heartbeatTimer = undefined;
       scheduleReconnect();
@@ -165,6 +187,9 @@ async function receiveServerMessage(
     await chrome.storage.local.remove(STORAGE_PAIRING_SECRET);
     connectionId = undefined;
     boundTabId = undefined;
+    completedTemplateCommandId = undefined;
+    activeTemplateCommandId = undefined;
+    await clearPendingOpeningTemplate();
     handshakeReady = true;
     return;
   }
@@ -186,6 +211,14 @@ async function receiveServerMessage(
   if (message.type === "page_bound") {
     boundTabId = message.tabId;
     lastError = undefined;
+    const pending = await getPendingOpeningTemplate();
+    if (
+      pending !== undefined &&
+      (pending.tabId !== message.tabId ||
+        pending.connectionId !== message.connectionId)
+    ) {
+      await clearPendingOpeningTemplate();
+    }
     return;
   }
   if (message.type === "preparation_state") {
@@ -195,6 +228,9 @@ async function receiveServerMessage(
   }
   if (message.type === "disarm") {
     boundTabId = undefined;
+    completedTemplateCommandId = undefined;
+    activeTemplateCommandId = undefined;
+    await clearPendingOpeningTemplate();
     lastError = message.reason;
     return;
   }
@@ -222,11 +258,43 @@ async function executeCommand(command: ExtensionCommand): Promise<void> {
     ) {
       throw new Error("页面命令不属于当前页面连接");
     }
+    await clearReplacedPendingOpeningTemplate(command.commandId);
+    if (
+      completedTemplateCommandId !== undefined &&
+      completedTemplateCommandId !== command.commandId
+    ) {
+      completedTemplateCommandId = undefined;
+    }
     const cached =
       commandResults.get(command.commandId) ??
       (await getPersistedCommandResult(command.commandId));
     if (cached !== undefined) {
-      send(cached);
+      let replayResult = cached;
+      const pending = await getPendingOpeningTemplate();
+      if (pending?.commandId === command.commandId) {
+        if (!isPendingOpeningTemplateBoundToCommand(pending, command)) {
+          await clearPendingOpeningTemplate(command.commandId);
+          send(cached);
+          return;
+        }
+        const continuation = waitForPendingOpeningTemplate(
+          command.commandId,
+          pending.deadline,
+        );
+        const tab = await chrome.tabs.get(pending.tabId).catch(() => undefined);
+        if (tab?.url !== undefined && tab.url !== pending.sourceUrl) {
+          void attemptPendingOpeningTemplateResume(pending.tabId, tab.url);
+        }
+        await continuation;
+        replayResult = await refreshCommandResultCurrentUrl(
+          cached,
+          pending.tabId,
+        );
+        if (replayResult !== cached) {
+          await cacheCommandResult(replayResult);
+        }
+      }
+      send(replayResult);
       return;
     }
     if (new Date(command.deadline).getTime() <= Date.now()) {
@@ -258,7 +326,14 @@ async function executeCommand(command: ExtensionCommand): Promise<void> {
           data: sendResult("结果未知", true, tab.url, "扩展在沟通操作期间中断"),
         };
         await persistCommandResult(placeholder);
-        result = await sendOpening(command, boundTabId);
+        activeTemplateCommandId = command.commandId;
+        try {
+          result = await sendOpening(command, boundTabId);
+        } finally {
+          if (activeTemplateCommandId === command.commandId) {
+            activeTemplateCommandId = undefined;
+          }
+        }
       }
     }
     await completeCommand({
@@ -290,13 +365,19 @@ async function executeCommand(command: ExtensionCommand): Promise<void> {
 async function completeCommand(
   result: Extract<ExtensionToServerMessage, { type: "command_result" }>,
 ): Promise<void> {
+  await cacheCommandResult(result);
+  send(result);
+}
+
+async function cacheCommandResult(
+  result: Extract<ExtensionToServerMessage, { type: "command_result" }>,
+): Promise<void> {
   commandResults.set(result.commandId, result);
   if (commandResults.size > 100) {
     const oldest = commandResults.keys().next().value;
     if (oldest !== undefined) commandResults.delete(oldest);
   }
   await persistCommandResult(result);
-  send(result);
 }
 
 async function calibrate(
@@ -411,13 +492,17 @@ async function sendOpening(
     finalOutgoingCount: number;
     confirmation?: "matched-message" | "boss-success-dialog";
     error?: string;
-  }>(tabId, { type: "send_opening", message: command.message });
+  }>(tabId, {
+    type: "send_opening",
+    commandId: command.commandId,
+    message: command.message,
+  });
   const takeover = takeoverFromInspection(response.inspection);
   if (takeover !== undefined && response.result !== "沟通成功") {
     assertNoTakeover(response.inspection);
   }
   const tab = await chrome.tabs.get(tabId);
-  return {
+  const executionResult: SendOpeningExecutionResult = {
     result: response.result,
     irreversibleStarted: response.irreversibleStarted,
     currentUrl: tab.url ?? response.inspection.url,
@@ -434,6 +519,79 @@ async function sendOpening(
     ...(takeover === undefined ? {} : { takeover }),
     ...(response.error === undefined ? {} : { error: response.error }),
   };
+  if (
+    response.result === "沟通成功" &&
+    response.confirmation === "boss-success-dialog"
+  ) {
+    const confirmedCommandResult: Extract<
+      ExtensionToServerMessage,
+      { type: "command_result" }
+    > = {
+      type: "command_result",
+      commandId: command.commandId,
+      outcome: "ok",
+      data: executionResult,
+    };
+    try {
+      await cacheCommandResult(confirmedCommandResult);
+      if (completedTemplateCommandId === command.commandId) {
+        completedTemplateCommandId = undefined;
+        return executionResult;
+      }
+      const continuation = waitForPendingOpeningTemplate(
+        command.commandId,
+        command.deadline,
+      );
+      await persistPendingOpeningTemplate({
+        state: "pending",
+        commandId: command.commandId,
+        connectionId: command.connectionId,
+        tabId,
+        sourceUrl: command.expectedUrl,
+        deadline: command.deadline,
+        message: command.message,
+      });
+      if (completedTemplateCommandId === command.commandId) {
+        completedTemplateCommandId = undefined;
+        await clearPendingOpeningTemplate(command.commandId);
+      }
+      const currentTab = await chrome.tabs.get(tabId).catch(() => undefined);
+      if (
+        currentTab?.url !== undefined &&
+        currentTab.url !== command.expectedUrl
+      ) {
+        void attemptPendingOpeningTemplateResume(tabId, currentTab.url);
+      }
+      await continuation;
+    } catch (error) {
+      lastError = `保存或等待开场模板续作失败：${messageOf(error)}`;
+      await settlePendingOpeningTemplate(command.commandId);
+    }
+  } else {
+    await clearPendingOpeningTemplate(command.commandId);
+  }
+  const currentUrl = await currentTabUrl(tabId, executionResult.currentUrl);
+  return currentUrl === executionResult.currentUrl
+    ? executionResult
+    : { ...executionResult, currentUrl };
+}
+
+async function refreshCommandResultCurrentUrl(
+  result: Extract<ExtensionToServerMessage, { type: "command_result" }>,
+  tabId: number,
+): Promise<Extract<ExtensionToServerMessage, { type: "command_result" }>> {
+  if (!isRecord(result.data) || typeof result.data.currentUrl !== "string") {
+    return result;
+  }
+  const currentUrl = await currentTabUrl(tabId, result.data.currentUrl);
+  return currentUrl === result.data.currentUrl
+    ? result
+    : { ...result, data: { ...result.data, currentUrl } };
+}
+
+async function currentTabUrl(tabId: number, fallback: string): Promise<string> {
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  return tab?.url ?? fallback;
 }
 
 function sendResult(
@@ -593,6 +751,17 @@ async function reportPageState(tabId: number, visible = true): Promise<void> {
   }
 }
 
+async function handlePageSignal(
+  tabId: number,
+  visible: boolean | undefined,
+  loadedUrl: string | undefined,
+): Promise<void> {
+  if (loadedUrl !== undefined) {
+    await attemptPendingOpeningTemplateResume(tabId, loadedUrl);
+  }
+  await reportPageState(tabId, visible);
+}
+
 async function navigate(tabId: number, url: string): Promise<void> {
   if (!isBossUrl(url)) throw new Error("拒绝导航到非 Boss 域名");
   await new Promise<void>((resolve, reject) => {
@@ -671,6 +840,9 @@ async function extensionState() {
 function emergencyStop(): void {
   send({ type: "emergency_stop", reason: "求职者通过扩展紧急停止" });
   boundTabId = undefined;
+  completedTemplateCommandId = undefined;
+  activeTemplateCommandId = undefined;
+  void settlePendingOpeningTemplate();
   preparation = {
     state: "idle",
     stage: "connecting",
@@ -687,6 +859,204 @@ function send(message: ExtensionToServerMessage): void {
 interface PersistedCommandResult {
   at: string;
   result: Extract<ExtensionToServerMessage, { type: "command_result" }>;
+}
+
+interface PendingOpeningTemplate {
+  state: "pending" | "dispatching";
+  commandId: string;
+  connectionId: string;
+  tabId: number;
+  sourceUrl: string;
+  deadline: string;
+  message: string;
+}
+
+async function persistPendingOpeningTemplate(
+  pending: PendingOpeningTemplate,
+): Promise<void> {
+  await chrome.storage.session.set({
+    [STORAGE_PENDING_OPENING_TEMPLATE]: pending,
+  });
+}
+
+async function getPendingOpeningTemplate(): Promise<
+  PendingOpeningTemplate | undefined
+> {
+  const stored = await chrome.storage.session.get(
+    STORAGE_PENDING_OPENING_TEMPLATE,
+  );
+  const value = stored[STORAGE_PENDING_OPENING_TEMPLATE];
+  if (value === undefined) return undefined;
+  if (isPendingOpeningTemplate(value)) return value;
+  await chrome.storage.session.remove(STORAGE_PENDING_OPENING_TEMPLATE);
+  return undefined;
+}
+
+async function clearPendingOpeningTemplate(commandId?: string): Promise<void> {
+  const pending = await getPendingOpeningTemplate();
+  if (commandId !== undefined) {
+    if (pending?.commandId !== commandId) {
+      if (pending === undefined) pendingTemplateWaiters.get(commandId)?.();
+      return;
+    }
+  }
+  await chrome.storage.session.remove(STORAGE_PENDING_OPENING_TEMPLATE);
+  if (commandId === undefined) {
+    for (const finish of [...pendingTemplateWaiters.values()]) finish();
+    return;
+  }
+  pendingTemplateWaiters.get(commandId)?.();
+}
+
+function waitForPendingOpeningTemplate(
+  commandId: string,
+  deadline: string,
+): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      pendingTemplateWaiters.delete(commandId);
+      resolve();
+    };
+    const timeout = setTimeout(
+      () => {
+        void clearPendingOpeningTemplate(commandId)
+          .catch((error: unknown) => {
+            lastError = `清理过期开场模板续作失败：${messageOf(error)}`;
+          })
+          .finally(finish);
+      },
+      Math.max(1, Date.parse(deadline) - Date.now()),
+    );
+    pendingTemplateWaiters.set(commandId, finish);
+  });
+}
+
+async function clearReplacedPendingOpeningTemplate(
+  commandId: string,
+): Promise<void> {
+  const pending = await getPendingOpeningTemplate();
+  if (pending !== undefined && pending.commandId !== commandId) {
+    await clearPendingOpeningTemplate();
+  }
+}
+
+async function resumePendingOpeningTemplate(
+  tabId: number,
+  loadedUrl: string,
+): Promise<void> {
+  const pending = await getPendingOpeningTemplate();
+  if (pending === undefined) return;
+  if (resumingTemplateCommands.has(pending.commandId)) return;
+  if (pending.state === "dispatching") {
+    await clearPendingOpeningTemplate(pending.commandId);
+    return;
+  }
+  if (Date.parse(pending.deadline) <= Date.now()) {
+    await clearPendingOpeningTemplate(pending.commandId);
+    return;
+  }
+  if (
+    pending.connectionId !== connectionId ||
+    pending.tabId !== tabId ||
+    boundTabId !== tabId
+  ) {
+    await clearPendingOpeningTemplate(pending.commandId);
+    return;
+  }
+  if (loadedUrl === pending.sourceUrl) return;
+  if (!isBossChatUrl(loadedUrl)) {
+    await clearPendingOpeningTemplate(pending.commandId);
+    return;
+  }
+
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  if (tab?.url !== loadedUrl) return;
+  const current = await getPendingOpeningTemplate();
+  if (
+    current?.commandId !== pending.commandId ||
+    resumingTemplateCommands.has(pending.commandId)
+  ) {
+    return;
+  }
+  resumingTemplateCommands.add(pending.commandId);
+  try {
+    await persistPendingOpeningTemplate({ ...pending, state: "dispatching" });
+    await sendTabMessage<{
+      completed: boolean;
+      error?: string;
+    }>(tabId, {
+      type: "resume_opening_template",
+      commandId: pending.commandId,
+      message: pending.message,
+      deadline: pending.deadline,
+    });
+  } finally {
+    try {
+      await clearPendingOpeningTemplate(pending.commandId);
+    } finally {
+      resumingTemplateCommands.delete(pending.commandId);
+    }
+  }
+}
+
+async function attemptPendingOpeningTemplateResume(
+  tabId: number,
+  loadedUrl: string,
+): Promise<void> {
+  try {
+    await resumePendingOpeningTemplate(tabId, loadedUrl);
+  } catch (error) {
+    lastError = `开场模板续作失败：${messageOf(error)}`;
+    try {
+      await clearPendingOpeningTemplate();
+    } catch (clearError) {
+      lastError = `清理开场模板续作失败：${messageOf(clearError)}`;
+    }
+  }
+}
+
+async function settlePendingOpeningTemplate(commandId?: string): Promise<void> {
+  try {
+    await clearPendingOpeningTemplate(commandId);
+  } catch (error) {
+    lastError = `清理开场模板续作失败：${messageOf(error)}`;
+  }
+}
+
+function isPendingOpeningTemplate(
+  value: unknown,
+): value is PendingOpeningTemplate {
+  return (
+    isRecord(value) &&
+    (value.state === "pending" || value.state === "dispatching") &&
+    isShortString(value.commandId, 100) &&
+    isShortString(value.connectionId, 100) &&
+    Number.isSafeInteger(value.tabId) &&
+    isShortString(value.sourceUrl, 4_096) &&
+    isBossUrl(value.sourceUrl) &&
+    isShortString(value.deadline, 100) &&
+    Number.isFinite(Date.parse(value.deadline)) &&
+    isShortString(value.message, 4_000)
+  );
+}
+
+function isPendingOpeningTemplateBoundToCommand(
+  pending: PendingOpeningTemplate,
+  command: ExtensionCommand,
+): boolean {
+  return (
+    command.type === "send-opening" &&
+    pending.commandId === command.commandId &&
+    pending.connectionId === command.connectionId &&
+    pending.tabId === command.expectedTabId &&
+    pending.sourceUrl === command.expectedUrl &&
+    pending.deadline === command.deadline &&
+    pending.message === command.message
+  );
 }
 
 async function getPersistedCommandResult(
@@ -763,6 +1133,31 @@ function isBossUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isBossChatUrl(value: string): boolean {
+  if (!isBossUrl(value)) return false;
+  try {
+    return /(?:^|\/)chat(?:\/|$)/.test(new URL(value).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function runtimeMessageUrl(message: { type: string }): string | undefined {
+  if (!("inspection" in message)) return undefined;
+  const inspection = message.inspection;
+  if (!isRecord(inspection) || typeof inspection.url !== "string") {
+    return undefined;
+  }
+  return inspection.url;
+}
+
+function runtimeMessageCommandId(message: {
+  type: string;
+}): string | undefined {
+  if (!("commandId" in message)) return undefined;
+  return isShortString(message.commandId, 100) ? message.commandId : undefined;
 }
 
 function isRuntimeMessage(value: unknown): value is { type: string } {

@@ -5,3 +5,6 @@ playwright-report
 test-results
 package-lock.json
 docs/adr
+AGENTS.md
+.agents/skills/trellis-*/**
+.trellis/**
