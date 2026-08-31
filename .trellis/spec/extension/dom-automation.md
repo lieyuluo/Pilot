@@ -101,11 +101,20 @@ findExactTextAction(document.body, "发送");
 findExactTextAction(nearestComposerContainer, "发送");
 ```
 
-Keep the failure explicit when no bounded action exists; do not add an Enter-key
-fallback without a sanitized failing fixture that proves the platform contract.
-The DOM regression must assert both the matching newly created outgoing message
-and zero clicks on an unrelated page-wide `发送` control, not merely that the
-composer received the template text.
+Supervised live verification confirms that BOSS also accepts Enter from the
+focused composer when it exposes no bounded `发送` control. Keep the bounded
+control path preferred. After the composer has accepted the exact template,
+use the existing bounded-control wait as a short stabilization window within
+the original deadline. If no control appears, recheck the deadline, focus the
+confirmed composer, recheck its bounded region once, then dispatch exactly one
+`keydown` Enter event (`key`/`code` `Enter`, legacy `keyCode` 13). Do not
+dispatch `keypress`/`keyup`, repeat Enter, or send Enter after expiry.
+
+The DOM regressions must prove a delayed keyboard handler receives one focused
+Enter and creates the matching outgoing message, an expired continuation
+receives no Enter, and a bounded send control is clicked without also receiving
+Enter. They must continue to assert zero clicks on unrelated page-wide `发送`
+controls; composer text alone is never completion evidence.
 
 ### Cross-document continuation
 
@@ -186,7 +195,7 @@ protocol or BOSS adapter version.
 | Current destination is not a BOSS chat page | Clear terminally; never probe or write an unrelated input. |
 | Chat shell exposes a text field labelled `搜索` / `查找` | Treat it as non-composer evidence and leave its value unchanged. |
 | Resume throws or returns incomplete | Preserve cached `沟通成功`, clear transient state, and release the command. |
-| Deadline expires before composer or send click | Do not write/click; clear and release. |
+| Deadline expires before composer, send click, or Enter | Do not write/click/dispatch Enter; clear and release. |
 | Continuation finishes after full-page navigation | Return and cache the bound tab's chat URL, not the source detail URL. |
 
 ### 5. Good / Base / Bad Cases
@@ -209,7 +218,8 @@ protocol or BOSS adapter version.
   signal; assert one dispatch and no early command result.
 - DOM/content-script tests: composer-only success, search-input rejection,
   search-labelled input rejection inside the chat shell,
-  expired-before-write rejection, and no contact-control click.
+  expired-before-write rejection, bounded-control preference, one focused Enter
+  fallback after delayed handler registration, and no contact-control click.
 - Final-result regression: after cross-document resume (including cached replay
   after worker restart), assert `command_result.data.currentUrl` equals the
   bound chat URL.

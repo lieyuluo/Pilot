@@ -42,6 +42,10 @@
    fixture showed that this could miss a nested non-semantic chat action and
    then click an unrelated page-wide `发送` control, leaving the template
    inserted but unsent.
+9. The bounded non-semantic control path was safe but still incomplete for the
+   live chat UI, which sends from the focused composer with Enter and exposes no
+   activatable bounded control. Treating “no control” as terminal ignored a
+   supervised, deadline-safe platform action that the user confirmed works.
 
 ## 3. Prevention Mechanisms
 
@@ -59,6 +63,8 @@
 | P0       | Final URL contract  | Refresh and persist the bound tab URL after continuation terminal state, including cached replay.             | DONE   |
 | P0       | Bounded send action | Reuse exact-text native/ARIA/non-semantic discovery only within the confirmed composer region.                 | DONE   |
 | P0       | Send confirmation test | Assert a matching new outgoing message and zero clicks on unrelated page-wide `发送` controls.              | DONE   |
+| P0       | Enter fallback contract | After the stabilization wait, focus the confirmed composer and send one Enter only when no bounded control exists. | DONE   |
+| P0       | Enter safety tests | Prove delayed-handler success, deadline expiry with zero Enter, and no click-plus-Enter duplication.              | DONE   |
 | P1       | Negative tests      | Cover ordinary article prose and dialog-like containers without a known action.                             | DONE   |
 | P1       | Live acceptance     | Reload the built extension and run one supervised BOSS batch without DevTools.                              | TODO   |
 
@@ -71,7 +77,10 @@
   positive ancestor such as `chat-page` can also swallow a stronger negative
   signal on a descendant control unless rejection rules run first. Action
   discovery must likewise remain bounded to the state-owning container; a
-  document-wide text fallback is unsafe even when the label is exact.
+  document-wide text fallback is unsafe even when the label is exact. When a
+  platform action has both control and keyboard forms, the fallback order,
+  focus target, deadline, at-most-once rule, and observable completion evidence
+  must all be specified and tested together.
 - **Design improvement**: keep action discovery centralized and evidence-bound,
   and treat domain completion, IPC delivery, and cross-document best-effort work
   as three separate completion gates.
@@ -94,6 +103,8 @@
 - [x] Added the bounded non-semantic send-control contract and a regression that
       proves the exact outgoing message while rejecting an unrelated page-wide
       `发送` control.
+- [x] Added the focused single-Enter fallback contract plus delayed readiness,
+      expiry, and no-double-send regressions.
 - [ ] Complete the supervised live acceptance check after reloading
       `dist/extension`.
 

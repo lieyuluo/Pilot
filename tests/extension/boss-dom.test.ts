@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { Window } from "happy-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   appendOpeningTemplateFromDocument,
@@ -624,6 +624,153 @@ describe("Boss extension DOM reader", () => {
         (item) => item.textContent,
       ),
     ).toEqual(["平台默认招呼", "您好，想进一步沟通。"]);
+  });
+
+  it("没有受限发送控件时等待聊天处理器就绪并聚焦输入框后按一次 Enter", async () => {
+    vi.useFakeTimers();
+    try {
+      const window = htmlWindow(`
+        <button id="contact">立即沟通</button>
+        <button id="page-send">发送</button>
+        <main class="chat-page">
+          <section class="message-list">
+            <p class="item-myself">平台默认招呼</p>
+          </section>
+          <section class="chat-composer">
+            <textarea id="composer" placeholder="发送消息"></textarea>
+          </section>
+        </main>
+      `);
+      const { document } = window;
+      const composer = document.querySelector(
+        "#composer",
+      ) as unknown as HTMLTextAreaElement;
+      let enterActions = 0;
+      let contactClicks = 0;
+      let pageSendClicks = 0;
+      document.querySelector("#contact")!.addEventListener("click", () => {
+        contactClicks += 1;
+      });
+      document.querySelector("#page-send")!.addEventListener("click", () => {
+        pageSendClicks += 1;
+      });
+      setTimeout(() => {
+        composer.addEventListener("keydown", (event) => {
+          const keyboardEvent = event as unknown as KeyboardEvent;
+          if (keyboardEvent.key !== "Enter") return;
+          expect(keyboardEvent.keyCode).toBe(13);
+          enterActions += 1;
+          expect(document.activeElement).toBe(composer);
+          const item = document.createElement("p");
+          item.className = "item-myself";
+          item.textContent = composer.value;
+          document.querySelector(".message-list")!.append(item);
+        });
+      }, 100);
+
+      const pending = appendOpeningTemplateFromDocument(
+        asBrowserDocument(window),
+        "您好，想进一步沟通。",
+        2_000,
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(pending).resolves.toEqual({ completed: true });
+      expect(enterActions).toBe(1);
+      expect({ contactClicks, pageSendClicks }).toEqual({
+        contactClicks: 0,
+        pageSendClicks: 0,
+      });
+      expect(
+        [...document.querySelectorAll(".item-myself")].map(
+          (item) => item.textContent,
+        ),
+      ).toEqual(["平台默认招呼", "您好，想进一步沟通。"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("受限发送控件探测耗尽截止时间后不会按 Enter", async () => {
+    vi.useFakeTimers();
+    try {
+      const window = htmlWindow(`
+        <main class="chat-page">
+          <section class="chat-composer">
+            <textarea id="composer" placeholder="发送消息"></textarea>
+          </section>
+        </main>
+      `);
+      const composer = window.document.querySelector(
+        "#composer",
+      ) as unknown as HTMLTextAreaElement;
+      let enterActions = 0;
+      composer.addEventListener("keydown", (event) => {
+        if ((event as unknown as KeyboardEvent).key === "Enter") {
+          enterActions += 1;
+        }
+      });
+
+      const pending = appendOpeningTemplateFromDocument(
+        asBrowserDocument(window),
+        "不得发送的过期模板",
+        100,
+      );
+      await vi.advanceTimersByTimeAsync(150);
+
+      await expect(pending).resolves.toEqual({
+        completed: false,
+        error: "开场模板续作已经过期",
+      });
+      expect(enterActions).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("存在聊天区域内发送控件时优先点击且不再按 Enter", async () => {
+    const window = htmlWindow(`
+      <main class="chat-page">
+        <section class="message-list">
+          <p class="item-myself">平台默认招呼</p>
+        </section>
+        <section class="chat-composer">
+          <textarea id="composer" placeholder="发送消息"></textarea>
+          <button id="send">发送</button>
+        </section>
+      </main>
+    `);
+    const { document } = window;
+    const composer = document.querySelector(
+      "#composer",
+    ) as unknown as HTMLTextAreaElement;
+    let sendClicks = 0;
+    let enterActions = 0;
+    composer.addEventListener("keydown", (event) => {
+      if ((event as unknown as KeyboardEvent).key === "Enter") {
+        enterActions += 1;
+      }
+    });
+    document.querySelector("#send")!.addEventListener("click", () => {
+      sendClicks += 1;
+      const item = document.createElement("p");
+      item.className = "item-myself";
+      item.textContent = composer.value;
+      document.querySelector(".message-list")!.append(item);
+    });
+
+    const outcome = await appendOpeningTemplateFromDocument(
+      asBrowserDocument(window),
+      "您好，想进一步沟通。",
+      100,
+    );
+
+    expect({ outcome, sendClicks, enterActions }).toEqual({
+      outcome: { completed: true },
+      sendClicks: 1,
+      enterActions: 0,
+    });
+    expect(document.querySelectorAll(".item-myself")).toHaveLength(2);
   });
 
   it("跨文档续作不会把开场模板写入职位搜索框", async () => {

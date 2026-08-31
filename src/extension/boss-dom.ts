@@ -165,14 +165,27 @@ export async function appendOpeningTemplateFromDocument(
     () => findSendButton(composer),
     Math.min(1_500, remainingTime()),
   );
-  if (sendButton === undefined) {
-    return { completed: false, error: "没有找到可用的聊天发送按钮" };
-  }
   if (Date.now() >= deadline) {
     return { completed: false, error: "开场模板续作已经过期" };
   }
 
-  sendButton.click();
+  if (sendButton !== undefined) {
+    sendButton.click();
+  } else {
+    composer.focus();
+    const focusedSendButton = findSendButton(composer);
+    if (Date.now() >= deadline) {
+      return { completed: false, error: "开场模板续作已经过期" };
+    }
+    if (focusedSendButton !== undefined) {
+      focusedSendButton.click();
+    } else if (!dispatchEnter(composer)) {
+      return {
+        completed: false,
+        error: "没有找到可用的聊天发送按钮，且无法按 Enter 发送",
+      };
+    }
+  }
   const created = await waitForOptional(() => {
     const messages = outgoingMessages(document).slice(existing.length);
     return messages.length > 0 ? messages : undefined;
@@ -646,6 +659,22 @@ function composerText(element: HTMLElement): string {
     return String((element as HTMLTextAreaElement | HTMLInputElement).value);
   }
   return element.textContent ?? "";
+}
+
+function dispatchEnter(composer: HTMLElement): boolean {
+  const KeyboardEventConstructor =
+    composer.ownerDocument.defaultView?.KeyboardEvent;
+  if (KeyboardEventConstructor === undefined) return false;
+  composer.dispatchEvent(
+    new KeyboardEventConstructor("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  return true;
 }
 
 async function waitFor<T>(

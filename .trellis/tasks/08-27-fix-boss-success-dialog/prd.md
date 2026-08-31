@@ -106,7 +106,11 @@ Additional requirements and acceptance criteria:
   or write into a search/unrelated input.
 - Filling the composer alone is incomplete: the resumed action must click the
   bounded chat send control and confirm a newly added exact matching outgoing
-  message. It must never fall back to a page-wide control with the same label.
+  message. If no bounded control appears after a short stabilization wait, it
+  may focus the confirmed composer and press Enter exactly once before the
+  original deadline. It must never use a page-wide control with the same label.
+- A bounded send control remains preferred and must not be combined with Enter.
+  An expired continuation must dispatch neither click nor Enter.
 - Persist success before waiting; continuation failure cannot downgrade it.
 - Clear transient state on completion, terminal inability, disconnect,
   tab/connection change, deadline, or command replacement.
@@ -114,3 +118,8 @@ Additional requirements and acceptance criteria:
   template at most once.
 - The one-contact `已达到批次上限` result is expected for a verification batch.
   Do not change quota behavior or add browser-history navigation.
+
+The subsequent supervised recheck confirmed that the correct composer receives
+the exact opening template and later navigation remains correct, but no send
+action occurs. Manual use on the same page confirmed Enter sends successfully;
+this is the live contract for the bounded fallback above.

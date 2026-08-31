@@ -103,6 +103,14 @@ is valid. The resumed operation is composer-only: it never looks for or clicks
 a contact control and retains the existing search-input filter. A same-document
 append sends an explicit completion signal instead.
 
+After the composer accepts the exact template, its bounded send control remains
+the first choice. The existing control-discovery wait doubles as a short page
+stabilization interval. If no control appears and the original deadline remains
+valid, the adapter focuses the confirmed composer, checks the bounded region one
+last time, and dispatches one `keydown` Enter event with `keyCode` 13 for legacy
+handlers. It never emits both click and Enter, never uses page-wide controls,
+and still requires a newly added exact matching outgoing message.
+
 The outbound command result waits until this best-effort continuation reaches a
 terminal point, preventing the next batch command from navigating away first.
 Because success was persisted before the wait, lifecycle loss cannot downgrade

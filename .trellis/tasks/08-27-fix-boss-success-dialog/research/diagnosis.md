@@ -84,3 +84,21 @@ selected correction stores one deadline-bound continuation in
 tab/BOSS chat page, and clears it after the first terminal attempt. The
 verification batch's one-contact completion is expected and needs no browser
 history action.
+
+## Confirmed Composer Send Gap
+
+The next supervised verification proved that cross-document continuation now
+finds the correct chat composer, writes the exact opening template, and leaves
+subsequent navigation functional. It also isolated the remaining gap: the live
+chat UI exposes no bounded send control that the adapter can activate, so the
+composer stays filled but unsent. Manual Enter on that same composer sends the
+message successfully.
+
+A deterministic fake-timer DOM regression reproduces the missing-control path
+with a keyboard handler registered after a short delay. Before the source
+change it returned `没有找到可用的聊天发送按钮` and emitted no Enter. The selected
+fallback preserves bounded-control preference, uses that discovery wait for
+stabilization, checks the original deadline, focuses only the confirmed
+composer, sends one `keydown` Enter with `keyCode` 13, and retains exact outgoing
+message confirmation. Separate regressions prevent Enter after expiry and
+prevent click-plus-Enter duplication.

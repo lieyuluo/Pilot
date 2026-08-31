@@ -88,3 +88,16 @@ extension ready for this manual confirmation.
   continuation is terminal so the next candidate cannot navigate away first.
 - Clear continuation state on all terminal/lifecycle boundaries and cover
   exactly-once append plus search-input rejection.
+
+## 9. Composer Enter Fallback Follow-up
+
+- Capture the supervised evidence that the correct composer receives the exact
+  template but no send action occurs, while manual Enter sends successfully.
+- Add deterministic fake-timer DOM regressions for a delayed keyboard handler,
+  expiry before Enter, and bounded-control preference without duplicate Enter.
+- After the existing bounded-control stabilization wait, focus only the
+  confirmed composer and dispatch one `keydown` Enter with legacy `keyCode` 13
+  when no bounded control exists and the original deadline is still valid.
+- Reuse the exact outgoing-message confirmation and keep contact clicks,
+  page-wide controls, retries, protocol fields, and service-worker flow
+  unchanged.
