@@ -579,6 +579,53 @@ describe("Boss extension DOM reader", () => {
     ).toEqual(["平台默认招呼", "您好，想进一步沟通。"]);
   });
 
+  it("导航后的聊天文档会点击聊天区域内嵌套的非语义发送控件", async () => {
+    const window = htmlWindow(`
+      <button id="page-send">发送</button>
+      <main class="chat-page">
+        <section class="message-list">
+          <p class="item-myself">平台默认招呼</p>
+        </section>
+        <section class="chat-composer">
+          <textarea id="composer" placeholder="发送消息"></textarea>
+          <div id="send-control"><span>发送</span></div>
+        </section>
+      </main>
+    `);
+    const { document } = window;
+    let pageSendClicks = 0;
+    let composerSendClicks = 0;
+    document.querySelector("#page-send")!.addEventListener("click", () => {
+      pageSendClicks += 1;
+    });
+    document.querySelector("#send-control")!.addEventListener("click", () => {
+      composerSendClicks += 1;
+      const item = document.createElement("p");
+      item.className = "item-myself";
+      item.textContent = (
+        document.querySelector("#composer") as unknown as HTMLTextAreaElement
+      ).value;
+      document.querySelector(".message-list")!.append(item);
+    });
+
+    const outcome = await appendOpeningTemplateFromDocument(
+      asBrowserDocument(window),
+      "您好，想进一步沟通。",
+      100,
+    );
+
+    expect({ outcome, pageSendClicks, composerSendClicks }).toEqual({
+      outcome: { completed: true },
+      pageSendClicks: 0,
+      composerSendClicks: 1,
+    });
+    expect(
+      [...document.querySelectorAll(".item-myself")].map(
+        (item) => item.textContent,
+      ),
+    ).toEqual(["平台默认招呼", "您好，想进一步沟通。"]);
+  });
+
   it("跨文档续作不会把开场模板写入职位搜索框", async () => {
     const window = htmlWindow(`
       <main class="job-search-page">

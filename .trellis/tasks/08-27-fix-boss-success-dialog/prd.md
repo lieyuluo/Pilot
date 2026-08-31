@@ -104,6 +104,9 @@ Additional requirements and acceptance criteria:
   same bound tab's newly loaded BOSS chat document is ready.
 - The resumed action is composer-only and must never repeat the contact click
   or write into a search/unrelated input.
+- Filling the composer alone is incomplete: the resumed action must click the
+  bounded chat send control and confirm a newly added exact matching outgoing
+  message. It must never fall back to a page-wide control with the same label.
 - Persist success before waiting; continuation failure cannot downgrade it.
 - Clear transient state on completion, terminal inability, disconnect,
   tab/connection change, deadline, or command replacement.

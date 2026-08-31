@@ -83,6 +83,30 @@ This includes the contact-search field rendered inside BOSS's chat-page shell.
 The rejection must happen before assigning a value so a failed composer lookup
 cannot leave the opening template in an unrelated field.
 
+### Send-control safety
+
+BOSS may render the chat composer action as nested non-semantic elements whose
+exact visible text is `发送`. Discover that action only inside the composer's
+nearest form/chat/message/conversation/dialog container. Prefer a native or
+ARIA control, then the smallest visible exact-text descendant so a click can
+bubble to the owning non-semantic control. Never fall back to page-wide `发送`
+text: an unrelated control may accept the click while leaving the template
+inserted but unsent.
+
+```typescript
+// Wrong: may click an unrelated page action after missing a nested chat control.
+findExactTextAction(document.body, "发送");
+
+// Correct: the exact action remains bound to the confirmed composer region.
+findExactTextAction(nearestComposerContainer, "发送");
+```
+
+Keep the failure explicit when no bounded action exists; do not add an Enter-key
+fallback without a sanitized failing fixture that proves the platform contract.
+The DOM regression must assert both the matching newly created outgoing message
+and zero clicks on an unrelated page-wide `发送` control, not merely that the
+composer received the template text.
+
 ### Cross-document continuation
 
 The service worker owns a single transient continuation in

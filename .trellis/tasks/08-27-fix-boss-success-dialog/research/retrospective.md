@@ -37,6 +37,11 @@
    before send-button discovery failed. It also returned the early persisted
    detail URL after the chat-page continuation, leaving the bridge's next
    `expectedUrl` stale and producing repeated page-change failures.
+8. After composer selection was corrected, the send step still assumed a
+   native page-wide `button`/`a` with exact text. The live symptom and minimal
+   fixture showed that this could miss a nested non-semantic chat action and
+   then click an unrelated page-wide `发送` control, leaving the template
+   inserted but unsent.
 
 ## 3. Prevention Mechanisms
 
@@ -52,6 +57,8 @@
 | P0       | Restart/race tests  | Cover early page load, cached replay, duplicate signals, expiry, corrupt state, and waiter cleanup.           | DONE   |
 | P0       | Negative composer evidence | Reject search-labelled fields even inside a chat-page container, before mutating their value.          | DONE   |
 | P0       | Final URL contract  | Refresh and persist the bound tab URL after continuation terminal state, including cached replay.             | DONE   |
+| P0       | Bounded send action | Reuse exact-text native/ARIA/non-semantic discovery only within the confirmed composer region.                 | DONE   |
+| P0       | Send confirmation test | Assert a matching new outgoing message and zero clicks on unrelated page-wide `发送` controls.              | DONE   |
 | P1       | Negative tests      | Cover ordinary article prose and dialog-like containers without a known action.                             | DONE   |
 | P1       | Live acceptance     | Reload the built extension and run one supervised BOSS batch without DevTools.                              | TODO   |
 
@@ -62,7 +69,9 @@
   content-script command that navigates can lose both its response and unfinished
   page work unless lifecycle ownership moves to the service worker. A broad
   positive ancestor such as `chat-page` can also swallow a stronger negative
-  signal on a descendant control unless rejection rules run first.
+  signal on a descendant control unless rejection rules run first. Action
+  discovery must likewise remain bounded to the state-owning container; a
+  document-wide text fallback is unsafe even when the label is exact.
 - **Design improvement**: keep action discovery centralized and evidence-bound,
   and treat domain completion, IPC delivery, and cross-document best-effort work
   as three separate completion gates.
@@ -82,6 +91,9 @@
 - [x] Added the chat-shell contact-search rejection and post-continuation final
       URL contract to `.trellis/spec/extension/dom-automation.md`.
 - [x] Added regressions for wrong-field mutation and stale cached `currentUrl`.
+- [x] Added the bounded non-semantic send-control contract and a regression that
+      proves the exact outgoing message while rejecting an unrelated page-wide
+      `发送` control.
 - [ ] Complete the supervised live acceptance check after reloading
       `dist/extension`.
 

@@ -82,6 +82,8 @@ extension ready for this manual confirmation.
 - Persist one transient continuation in `chrome.storage.session`, bound to the
   original command, connection, tab, source page, and deadline.
 - Add a composer-only content-script command and never repeat the contact click.
+- Discover and click `发送` only inside the confirmed composer region, including
+  nested non-semantic controls, and confirm the exact new outgoing message.
 - Persist success before waiting, but delay the outbound command result until
   continuation is terminal so the next candidate cannot navigate away first.
 - Clear continuation state on all terminal/lifecycle boundaries and cover

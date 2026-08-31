@@ -162,7 +162,7 @@ export async function appendOpeningTemplateFromDocument(
   }
 
   const sendButton = await waitForOptional(
-    () => findSendButton(document, composer),
+    () => findSendButton(composer),
     Math.min(1_500, remainingTime()),
   );
   if (sendButton === undefined) {
@@ -341,7 +341,7 @@ export async function sendOpeningFromDocument(
       );
     }
     const sendButton = await waitForOptional(
-      () => findSendButton(document, composer),
+      () => findSendButton(composer),
       Math.min(1_500, remainingTime()),
     );
     if (sendButton === undefined) {
@@ -575,24 +575,13 @@ function isChatComposer(element: HTMLElement): boolean {
   return chatContext !== null || /消息|沟通|发送/.test(inputHint);
 }
 
-function findSendButton(
-  document: Document,
-  composer: HTMLElement,
-): HTMLElement | undefined {
-  const container = composer.closest<HTMLElement>(
-    'form, [class*="chat"], [class*="message"], [class*="dialog"]',
+function findSendButton(composer: HTMLElement): HTMLElement | undefined {
+  const container = composer.parentElement?.closest<HTMLElement>(
+    'form, [class*="chat"], [class*="message"], [class*="conversation"], [class*="dialog"], [id*="chat"], [id*="message"], [id*="conversation"]',
   );
-  const scopes: ParentNode[] =
-    container === null ? [document] : [container, document];
-  for (const scope of scopes) {
-    const button = [...scope.querySelectorAll<HTMLElement>("button, a")].find(
-      (element) =>
-        isElementAvailable(element) &&
-        /^发送$/.test(compactText(textOf(element))),
-    );
-    if (button !== undefined) return button;
-  }
-  return undefined;
+  return container === undefined || container === null
+    ? undefined
+    : findExactTextAction(container, "发送");
 }
 
 function isElementAvailable(element: HTMLElement): boolean {
